@@ -896,6 +896,16 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   </div>
 </div>
 
+<!-- Foto-visning (fuld størrelse) — bruges for alle billeder klienter sender ind
+     (kost-log, træning gennemført m.fl.), som ellers kun var vist som et lille
+     thumbnail uden nogen måde at se det ordentligt eller "gå tilbage" fra. -->
+<div class="modal-overlay" id="modal-photo-viewer" onclick="if(event.target===this)closeModal('modal-photo-viewer')">
+  <div style="display:flex;flex-direction:column;align-items:center;gap:12px;max-width:100%;max-height:100%">
+    <img id="photo-viewer-img" src="" style="max-width:100%;max-height:80vh;border-radius:var(--radius);object-fit:contain">
+    <button class="btn" onclick="closeModal('modal-photo-viewer')">‹ Tilbage</button>
+  </div>
+</div>
+
 <!-- Check-in sent confirmation -->
 <div class="modal-overlay" id="modal-ci-sent">
   <div class="modal" style="text-align:center">
@@ -982,6 +992,10 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       </div>
       <label id="ex-detail-weight-label">Vægt du bruger (kg)</label>
       <input type="text" inputmode="decimal" id="ex-detail-weight-input" placeholder="fx 60" style="font-size:22px;font-weight:700;padding:14px 13px">
+      <div id="ex-detail-extra-weight-wrap" style="display:none;margin-top:10px">
+        <label>Ekstra vægt (fx vægtvest), kg — valgfrit</label>
+        <input type="text" inputmode="decimal" id="ex-detail-extra-weight-input" placeholder="fx 6">
+      </div>
     </div>
     <div id="ex-detail-history" style="margin-bottom:8px;font-size:15px"></div>
     <div class="modal-actions">
@@ -1742,7 +1756,7 @@ async function pushToSupabase() {
     // batchet fejler — inkl. den nye check-in klienten faktisk ville sende. Derfor
     // filtrerer vi til kun de reelt nye rækker, når man er logget ind som klient.
     const toUpsert = (currentUser === 'coach')
-      ? DATA.checkins
+      ? DATA.checkins.filter(ci => coachDirtyCheckinIds.has(ci.id))
       : DATA.checkins.filter(ci => !clientSyncedCheckinIds.has(ci.id));
     if (toUpsert.length) {
       const { error } = await sb.from('checkins').upsert(toUpsert.map(ci => ({
@@ -1750,14 +1764,18 @@ async function pushToSupabase() {
         comment: ci.comment || '', reply: ci.reply || '', auto_replied: !!ci.autoReplied, from_coach: !!ci.fromCoach,
         hidden_for_coach: !!ci.hiddenForCoach, hidden_for_client: !!ci.hiddenForClient
       })));
-      // MIDLERTIDIGT under fejlsøgning: vis fejlen synligt i appen (ikke kun konsollen),
-      // så den kan læses uden udviklerværktøjer. Kan fjernes igen når check-in-bugget
-      // er fundet og rettet for godt.
+      // Vises synligt i appen (ikke kun konsollen), så en fejl kan opdages uden
+      // udviklerværktøjer — check-ins er ikke i CRITICAL_SYNC_SECTIONS foroven,
+      // men fortjener samme synlighed, siden en fejl her opleves som "kan ikke
+      // svare på check-ins".
       if (error) {
         showToast('⚠ Check-in fejlede: ' + error.message);
         throw error;
       }
-      toUpsert.forEach(ci => clientSyncedCheckinIds.add(ci.id));
+      toUpsert.forEach(ci => {
+        clientSyncedCheckinIds.add(ci.id);
+        coachDirtyCheckinIds.delete(ci.id);
+      });
     }
   });
 
@@ -1798,6 +1816,14 @@ async function pushToSupabase() {
 // Se kommentar inde i refreshFromSupabase() og i "checkins"-sync-sektionen for hvorfor
 // denne findes: klienten må kun INSERTe nye check-ins, aldrig upserte allerede-kendte.
 let clientSyncedCheckinIds = new Set();
+// FUNDET 2026-08-11: coachen sendte HELE DATA.checkins (alle klienters fulde
+// historik, ofte hundredvis af rækker) i ét upsert-kald ved ENHVER ændring —
+// også ved et enkelt svar på én check-in. Fejlede validering af bare én enkelt
+// (ofte gammel) række i det store batch, fejlede HELE upsert'et, inkl. det nye
+// svar coachen lige havde skrevet — oplevedes som "kan ikke svare på
+// check-ins". Rettet ved kun at sende de rækker, der faktisk er ændret siden
+// sidste vellykkede sync, samme princip som klientens clientSyncedCheckinIds.
+let coachDirtyCheckinIds = new Set();
 // Samme princip for run_logs og training_checkins (se kommentaren i "training_checkins"-
 // sync-sektionen) — men her må klienten gerne opdatere allerede-kendte rækker bagefter,
 // så disse sæt bruges til at afgøre INSERT vs. UPDATE, ikke til at blokere update helt.
@@ -2185,19 +2211,35 @@ function snapshotForLocalStorage() {
   return snap;
 }
 
+// "Tilføj til hjemmeskærm" på iOS kører siden i "standalone"-tilstand, som er
+// kendt for af og til at afvise localStorage-skrivninger uden reel pladsmangel
+// (midlertidig lager-fejl, ikke et ægte fuldt loft). Ét forsøg på at rydde
+// nøglen og skrive igen løser de fleste af de tilfælde, uden at det kræver
+// nogen handling fra brugeren.
+let lastLocalCacheWarningAt = 0;
 function save() {
   try {
     const json = JSON.stringify(snapshotForLocalStorage());
-    localStorage.setItem(SK, json);
+    try {
+      localStorage.setItem(SK, json);
+    } catch (retryable) {
+      localStorage.removeItem(SK);
+      localStorage.setItem(SK, json);
+    }
     warnIfLocalStorageGettingFull(json);
     return queueSupabaseSync();
   } catch (err) {
     console.error('Kunne ikke gemme til localStorage', err);
     if (sb) {
       // Billeder er allerede uden for denne lokale kopi, så fejlen skyldes noget andet
-      // (fx privat-browsing der blokerer localStorage helt). Data er stadig trygt i
-      // Supabase — det er kun den lokale offline-cache der ikke kunne skrives.
-      showToast('⚠ Kunne ikke gemme lokal cache — data er stadig gemt i skyen');
+      // (fx privat-browsing, eller iOS' "Tilføj til hjemmeskærm"-tilstand der af og
+      // til afviser en skrivning midlertidigt). Data er stadig trygt i Supabase —
+      // det er kun den lokale offline-cache der ikke kunne skrives. Højst én
+      // advarsel pr. time, så det ikke popper op ved hvert eneste tryk.
+      if (Date.now() - lastLocalCacheWarningAt > 60 * 60 * 1000) {
+        lastLocalCacheWarningAt = Date.now();
+        showToast('⚠ Kunne ikke gemme lokal cache — data er stadig gemt i skyen');
+      }
     } else {
       try {
         const stripped = JSON.parse(JSON.stringify(DATA));
@@ -2896,7 +2938,7 @@ function sendReply(ciId, inputEl) {
   const text = inputEl ? inputEl.value.trim() : '';
   if (!text) return;
   const ci = DATA.checkins.find(c => c.id === ciId);
-  if (ci) { ci.reply = text; ci.autoReplied = false; save(); }
+  if (ci) { ci.reply = text; ci.autoReplied = false; coachDirtyCheckinIds.add(ciId); save(); }
   renderCoachDashboard();
   if (currentDetailTab === 'history') renderDetailHistory(currentClientId);
   renderAllCheckins();
@@ -2908,6 +2950,7 @@ function hideCheckinForCoach(ciId) {
   const ci = DATA.checkins.find(c => c.id === ciId);
   if (!ci) return;
   ci.hiddenForCoach = true;
+  coachDirtyCheckinIds.add(ciId);
   save();
   renderCoachDashboard();
   renderAllCheckins();
@@ -3047,6 +3090,7 @@ function sendCoachMessage(clientId) {
     hiddenForClient: false
   };
   DATA.checkins.push(ci);
+  coachDirtyCheckinIds.add(ci.id);
   save();
   showToast('Besked sendt');
   renderAllCheckins();
@@ -4449,14 +4493,14 @@ function renderDetailHistory(clientId) {
       return `<div class="checkin-card">
         <div class="checkin-header"><div class="checkin-time">${fmtDate(t.date)} · 🏃 Træning gennemført — ${escapeHtml(t.type)}</div></div>
         ${t.rating ? `<div class="score-chip" style="max-width:90px;margin:8px 0 0"><div class="score-val s${t.rating}">${t.rating}</div><div class="score-lbl">Hvordan gik det</div></div>` : ''}
-        ${t.photo ? `<img src="${t.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block">` : ''}
+        ${t.photo ? `<img src="${t.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
         ${t.note ? `<div class="checkin-comment">"${escapeHtml(t.note)}"</div>` : ''}
       </div>`;
     }
     const m = item.data;
     return `<div class="checkin-card">
       <div class="checkin-header"><div class="checkin-time">${fmtDate(m.date)}${m.time ? ' · ' + m.time : ''} · 🍽️ ${escapeHtml(m.mealType)}</div></div>
-      ${m.photo ? `<img src="${m.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block">` : ''}
+      ${m.photo ? `<img src="${m.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
       ${m.note ? `<div class="checkin-comment">"${escapeHtml(m.note)}"</div>` : ''}
     </div>`;
   };
@@ -5688,16 +5732,21 @@ function latestWeightFor(program, key) {
 // Vægt-feltet gemmes fortsat som ren tekst i weight_logs (ingen ny Supabase-kolonne,
 // ingen migration nødvendig) — men med en bevidst prefix-konvention, så tre
 // forskellige "typer" kan skelnes uden at bryde ældre data:
-//   "101.6"      → almindelig kg-vægt (som hele tiden)
-//   "BW"         → gammel ren kropsvægt-registrering (før denne genopbygning)
-//   "BW:101.6"   → kropsvægt, med den faktiske kg-værdi gemt til reference
-//   "SEC:45"     → holdetid i sekunder (fx planke), ikke en vægt
+//   "101.6"        → almindelig kg-vægt (som hele tiden)
+//   "BW"           → gammel ren kropsvægt-registrering (før denne genopbygning)
+//   "BW:101.6"     → kropsvægt, med den faktiske kg-værdi gemt til reference
+//   "BW:101.6+10"  → kropsvægt + ekstra vægt (fx vægtvest), samme konvention som
+//                    native-appen (rc-mobile) allerede bruger — portet hertil så
+//                    begge udgaver viser/gemmer det ens.
+//   "SEC:45"       → holdetid i sekunder (fx planke), ikke en vægt
 // parseFloat() af "BW:101.6" og "SEC:45" giver NaN (starter ikke med et tal), så
 // den eksisterende kg-graf-logik (isNaN(parseFloat(...))) filtrerer dem korrekt
 // fra uden at der skal ændres noget i selve grafen.
 function parseWeightEntry(raw) {
   if (raw == null || raw === '') return { mode: 'kg', value: '' };
   const s = String(raw).trim();
+  const bwWithExtra = s.match(/^bw:([^+]+)\+(.+)$/i);
+  if (bwWithExtra) return { mode: 'bw', value: bwWithExtra[1], extra: bwWithExtra[2] };
   const bwPrefixed = s.match(/^bw:(.+)$/i);
   if (bwPrefixed) return { mode: 'bw', value: bwPrefixed[1] };
   if (/^bw$/i.test(s)) return { mode: 'bw', value: '' };
@@ -5717,7 +5766,10 @@ function getLatestBodyWeight(clientId) {
 function formatWeightDisplay(w) {
   if (w == null || w === '') return '';
   const parsed = parseWeightEntry(w);
-  if (parsed.mode === 'bw') return parsed.value ? `BW (${parsed.value} kg)` : 'BW';
+  if (parsed.mode === 'bw') {
+    if (!parsed.value) return 'BW';
+    return parsed.extra ? `BW (${parsed.value} kg) + ${parsed.extra} kg` : `BW (${parsed.value} kg)`;
+  }
   if (parsed.mode === 'sec') return `${parsed.value} sek`;
   const isNumeric = !isNaN(parseFloat(w)) && isFinite(w);
   return isNumeric ? (w + ' kg') : String(w).toUpperCase();
@@ -5734,6 +5786,10 @@ function exSetWeightMode(mode) {
   document.getElementById('ex-mode-sec').classList.toggle('btn-primary', mode === 'sec');
   const label = document.getElementById('ex-detail-weight-label');
   const input = document.getElementById('ex-detail-weight-input');
+  const extraWrap = document.getElementById('ex-detail-extra-weight-wrap');
+  const extraInput = document.getElementById('ex-detail-extra-weight-input');
+  extraWrap.style.display = mode === 'bw' ? 'block' : 'none';
+  if (mode !== 'bw') extraInput.value = '';
   if (mode === 'bw') {
     const bw = getLatestBodyWeight(currentExerciseDetail.clientId);
     label.textContent = 'Kropsvægt (hentes automatisk fra Krop-fanen)';
@@ -5831,6 +5887,7 @@ function openExerciseDetail(programId, libraryId, clientId) {
   const parsed = parseWeightEntry(lastRaw);
   exSetWeightMode(parsed.mode);
   if (parsed.mode !== 'bw') document.getElementById('ex-detail-weight-input').value = parsed.value;
+  if (parsed.mode === 'bw' && parsed.extra) document.getElementById('ex-detail-extra-weight-input').value = parsed.extra;
   document.getElementById('ex-detail-date-input').value = new Date().toISOString().split('T')[0];
   renderExerciseWeightHistory();
   document.getElementById('modal-exercise-detail').classList.add('open');
@@ -5865,7 +5922,14 @@ async function saveExerciseDetailWeight() {
   if (!date) { alert('Vælg en dato'); return; }
   let value;
   if (exDetailWeightMode === 'bw') {
-    value = raw !== '' ? ('BW:' + raw) : 'BW';
+    const extraRaw = document.getElementById('ex-detail-extra-weight-input').value.trim();
+    if (raw === '') {
+      value = 'BW';
+    } else if (extraRaw !== '') {
+      value = 'BW:' + raw + '+' + extraRaw;
+    } else {
+      value = 'BW:' + raw;
+    }
   } else if (exDetailWeightMode === 'sec') {
     if (raw === '') { showToast('Indtast antal sekunder'); return; }
     value = 'SEC:' + raw;
@@ -7297,6 +7361,16 @@ function renderClientCalendar() {
 // ══════════════════════════════════════
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
+}
+
+// Åbner et billede i fuld størrelse — se modal-photo-viewer i HTML'en. Fandtes
+// ikke tidligere: billeder (kost-log, træning gennemført) var kun vist som et
+// lille thumbnail, uden nogen måde at se dem ordentligt eller lukke/"gå
+// tilbage" fra en forstørret visning.
+function openPhotoViewer(src) {
+  if (!src) return;
+  document.getElementById('photo-viewer-img').src = src;
+  document.getElementById('modal-photo-viewer').classList.add('open');
 }
 
 document.querySelectorAll('.modal-overlay').forEach(m => {
