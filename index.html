@@ -6926,17 +6926,31 @@ function getUpcomingBirthdays(withinDays = 31) {
     .filter(b => b.daysUntil !== null && b.daysUntil <= withinDays)
     .sort((a, b) => a.daysUntil - b.daysUntil);
 }
+// 2026-08-13, efter Runes design-review (klienter/coachen skal ikke bruge
+// unødig tid på at finde det vigtige): kun "denne uge" vises som
+// udgangspunkt, resten er 1 klik væk — så listen ikke vokser sig ubegrænset
+// lang foran den faktiske klientliste.
+let birthdayNotificationsExpanded = false;
+function toggleBirthdayNotifications() {
+  birthdayNotificationsExpanded = true;
+  renderBirthdayNotifications();
+}
 function renderBirthdayNotifications() {
   const upcoming = getUpcomingBirthdays();
   const el = document.getElementById('coach-birthday-notifications');
   if (!el) return 0;
   if (!upcoming.length) { el.style.display = 'none'; el.innerHTML = ''; return 0; }
   el.style.display = 'block';
-  el.innerHTML = `<div class="section-head">🎂 Fødselsdage</div>` + upcoming.map(b => `
+  const thisWeek = upcoming.filter(b => b.daysUntil <= 7);
+  const later = upcoming.filter(b => b.daysUntil > 7);
+  const visible = birthdayNotificationsExpanded ? upcoming : thisWeek;
+  el.innerHTML = `<div class="section-head">🎂 Fødselsdage</div>` + visible.map(b => `
     <div class="card" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
       <div style="font-weight:700">${escapeHtml(b.clientName)}${b.turningAge != null ? ` (fylder ${b.turningAge})` : ''}</div>
       <div style="font-size:13px;font-weight:700;color:${b.daysUntil === 0 ? 'var(--accent)' : 'var(--gray)'}">${b.daysUntil === 0 ? 'I DAG' : b.daysUntil === 1 ? 'i morgen' : `om ${b.daysUntil} dage`}</div>
-    </div>`).join('');
+    </div>`).join('') + (!birthdayNotificationsExpanded && later.length
+      ? `<div class="card-sub" style="text-align:center;cursor:pointer;color:var(--accent)" onclick="toggleBirthdayNotifications()">Vis ${later.length} flere (senere denne måned)</div>`
+      : '');
   return upcoming.length;
 }
 
@@ -6948,6 +6962,11 @@ function renderBirthdayNotifications() {
 // ══════════════════════════════════════
 const WEEKDAY_LABELS = ['Søndag', 'Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag'];
 
+let coachTasksRestExpanded = false;
+function toggleCoachTasksRest() {
+  coachTasksRestExpanded = true;
+  renderCoachTasksSection();
+}
 function renderCoachTasksSection() {
   const el = document.getElementById('coach-tasks-section');
   if (!el) return;
@@ -6961,11 +6980,13 @@ function renderCoachTasksSection() {
     <div class="card" style="margin-bottom:6px;background:var(--accent);display:flex;justify-content:space-between;align-items:center">
       <div style="color:#111;font-weight:700;font-size:13px">I DAG — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
       <button class="btn-icon" style="color:#111" onclick="deleteCoachTask(${t.id})">×</button>
-    </div>`).join('') + rest.map(t => `
+    </div>`).join('') + (coachTasksRestExpanded ? rest.map(t => `
     <div class="card" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
       <div style="font-size:13px">${WEEKDAY_LABELS[t.dayOfWeek]} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
       <button class="btn-icon" onclick="deleteCoachTask(${t.id})">×</button>
-    </div>`).join('');
+    </div>`).join('') : (rest.length
+      ? `<div class="card-sub" style="text-align:center;cursor:pointer;color:var(--accent)" onclick="toggleCoachTasksRest()">Vis resten af ugens opgaver (${rest.length})</div>`
+      : ''));
 
   el.innerHTML = `
     <div class="section-head" style="display:flex;justify-content:space-between;align-items:center">
