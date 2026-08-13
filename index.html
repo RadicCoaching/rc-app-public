@@ -314,6 +314,8 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     <div class="content">
       <div id="coach-booking-notifications" style="display:none;margin-bottom:16px"></div>
       <div id="coach-goal-notifications" style="display:none;margin-bottom:16px"></div>
+      <div id="coach-birthday-notifications" style="display:none;margin-bottom:16px"></div>
+      <div id="coach-tasks-section" style="margin-bottom:16px"></div>
       <div class="section-head">Klienter</div>
       <div id="coach-client-list" style="border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div>
       <div style="margin-top:20px;display:flex;gap:10px">
@@ -535,6 +537,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
         <div class="client-welcome-sub">Radich Coaching</div>
       </div>
       <div class="divider"></div>
+      <div id="client-home-birthday-banner"></div>
       <div id="client-home-focus"></div>
       <div id="client-home-booking-banner"></div>
       <div id="client-home-sessions-left"></div>
@@ -1177,6 +1180,24 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   </div>
 </div>
 
+<!-- Coach-opgave (ugentlig huskeliste, 2026-08-13) -->
+<div class="modal-overlay" id="modal-coach-task">
+  <div class="modal">
+    <div class="modal-title">Ny opgave</div>
+    <div class="field"><label>Opgave</label><input type="text" id="ct-title" placeholder="fx Ring til klient om ugens træning"></div>
+    <div class="field"><label>Ugedag</label>
+      <select id="ct-day"></select>
+    </div>
+    <div class="field"><label>Klient (valgfrit)</label>
+      <select id="ct-client"><option value="">Ingen klient</option></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-coach-task')">Annuller</button>
+      <button class="btn btn-primary" onclick="saveCoachTask()">Gem</button>
+    </div>
+  </div>
+</div>
+
 <!-- Kost-log -->
 <div class="modal-overlay" id="modal-meal-log">
   <div class="modal">
@@ -1250,6 +1271,7 @@ function loadData() {
       if (!parsed.mealLogs) parsed.mealLogs = [];
       if (!parsed.bookingSlots) parsed.bookingSlots = [];
       if (!parsed.sessionCredits) parsed.sessionCredits = [];
+      if (!parsed.coachTasks) parsed.coachTasks = [];
       if (!parsed.trainingTypes) parsed.trainingTypes = ['Løb', 'Gåtur', 'Cykling', 'Spinning', 'Styrke', 'OCR', 'CrossFit', 'Andet'];
       ['Gåtur', 'Cykling', 'Spinning'].forEach(t => { if (!parsed.trainingTypes.includes(t)) parsed.trainingTypes.push(t); });
       if (parsed.coachCelebrationPhoto === undefined) parsed.coachCelebrationPhoto = '';
@@ -1268,6 +1290,8 @@ function loadData() {
       (parsed.clients || []).forEach(c => {
         if (c.heightCm === undefined) c.heightCm = null;
         if (c.birthYear === undefined) c.birthYear = null;
+        if (c.birthMonth === undefined) c.birthMonth = null;
+        if (c.birthDay === undefined) c.birthDay = null;
         if (c.sex === undefined) c.sex = null;
         if (c.pal === undefined) c.pal = null;
         if (!c.trainingGoals) c.trainingGoals = [];
@@ -1382,6 +1406,7 @@ function loadData() {
     mealLogs: [],
     bookingSlots: [],
     sessionCredits: [],
+    coachTasks: [],
     trainingTypes: ['Løb', 'Gåtur', 'Cykling', 'Spinning', 'Styrke', 'OCR', 'CrossFit', 'Andet'],
     coachCelebrationPhoto: '',
     // NYT (session 11) — km/tid-logning for flere aktivitetstyper end kun Løb.
@@ -1489,6 +1514,7 @@ let pendingDeletes = {
   appointments: new Set(),
   programTemplates: new Set(),
   sessionCredits: new Set(),
+  coachTasks: new Set(),
   trainingCheckins: new Set(),
   runLogs: new Set(),
 };
@@ -1558,7 +1584,8 @@ async function pushToSupabase() {
   await section('clients', async () => {
     if (DATA.clients.length) {
       await sb.from('clients').upsert(DATA.clients.map(c => ({
-        id: c.id, name: c.name, pin: c.pin, height_cm: c.heightCm, birth_year: c.birthYear, sex: c.sex, pal: c.pal,
+        id: c.id, name: c.name, pin: c.pin, height_cm: c.heightCm, birth_year: c.birthYear,
+        birth_month: c.birthMonth || null, birth_day: c.birthDay || null, sex: c.sex, pal: c.pal,
         show_weight: !!(c.visibleStats && c.visibleStats.weight),
         show_bmi: !!(c.visibleStats && c.visibleStats.bmi),
         show_bmr: !!(c.visibleStats && c.visibleStats.bmr),
@@ -1747,6 +1774,17 @@ async function pushToSupabase() {
       pendingDeletes.sessionCredits.clear();
     }
   });
+  await section('coach_tasks', async () => {
+    if (DATA.coachTasks && DATA.coachTasks.length) {
+      await sb.from('coach_tasks').upsert(DATA.coachTasks.map(t => ({
+        id: t.id, client_id: t.clientId || null, title: t.title, day_of_week: t.dayOfWeek
+      })));
+    }
+    if (pendingDeletes.coachTasks.size) {
+      await sb.from('coach_tasks').delete().in('id', [...pendingDeletes.coachTasks]);
+      pendingDeletes.coachTasks.clear();
+    }
+  });
   await section('checkins', async () => {
     // Coach har fuld adgang (RLS "for all") og må gerne upserte alt — det er sådan
     // svar/skjul-status på klienters check-ins bliver gemt.
@@ -1840,7 +1878,7 @@ async function refreshFromSupabase() {
   // af DATA — det er det der har fået nyligt gemte vægte/rækkefølger til at forsvinde igen.
   await supabaseSyncChain;
   try {
-    const [coachRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes, tmplRes, scRes] = await Promise.all([
+    const [coachRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes, tmplRes, scRes, ctRes] = await Promise.all([
       sb.from('coach_status').select('*').eq('id', 1).maybeSingle(),
       sb.from('exercise_library').select('*'),
       sb.from('clients').select('*'),
@@ -1857,6 +1895,7 @@ async function refreshFromSupabase() {
       sb.from('booking_slots').select('*'),
       sb.from('program_templates').select('*'),
       sb.from('session_credits').select('*'),
+      sb.from('coach_tasks').select('*'),
     ]);
 
     const allResults = { coachRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes };
@@ -1870,6 +1909,7 @@ async function refreshFromSupabase() {
     // skal det IKKE blokere resten af indlæsningen, bare give en tom skabelon-liste.
     if (tmplRes.error) console.error('Supabase refresh error (tmplRes)', tmplRes.error);
     if (scRes.error) console.error('Supabase refresh error (scRes) — er rc_supabase_migration_session_credits.sql kørt?', scRes.error);
+    if (ctRes.error) console.error('Supabase refresh error (ctRes) — er coach_tasks-migrationen kørt?', ctRes.error);
     // Tomt Supabase-projekt (skema lige kørt, intet pushet endnu) — behold lokal data, den bliver pushet op ved næste save().
     if (!clientsRes.data || !clientsRes.data.length) return false;
 
@@ -1911,7 +1951,8 @@ async function refreshFromSupabase() {
     });
 
     const clients = clientsRes.data.map(c => ({
-      id: c.id, name: c.name, pin: c.pin, heightCm: c.height_cm, birthYear: c.birth_year, sex: c.sex, pal: c.pal,
+      id: c.id, name: c.name, pin: c.pin, heightCm: c.height_cm, birthYear: c.birth_year,
+      birthMonth: c.birth_month || null, birthDay: c.birth_day || null, sex: c.sex, pal: c.pal,
       visibleStats: { weight: !!c.show_weight, bmi: !!c.show_bmi, bmr: !!c.show_bmr, kcal: !!c.show_kcal, sessionsLeft: !!c.show_sessions_left, distanceKm: !!c.show_distance_km },
       trainingGoals: c.training_goals || [], showTrainingGoal: !!c.show_training_goal,
       trainingPause: c.training_pause || null, celebrated: c.celebrated || {}, coachNotifiedGoals: c.coach_notified_goals || {},
@@ -1946,6 +1987,7 @@ async function refreshFromSupabase() {
       trainingCheckins: (tcRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo: t.photo_url || '', runLogId: t.run_log_id || null })),
       mealLogs: (mlRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, time: m.time || '', mealType: m.meal_type, note: m.note || '', photo: m.photo_url || '' })),
       sessionCredits: (scRes.data || []).map(s => ({ id: s.id, clientId: s.client_id, date: s.date, type: s.type, delta: s.delta, note: s.note || '' })),
+      coachTasks: (ctRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, title: t.title, dayOfWeek: t.day_of_week })),
       bookingSlots: (bookingRes.data || []).map(s => ({
         id: s.id, date: s.date, time: s.time || '', durationMin: s.duration_min || 60,
         // NYT (session 21) — synlighed er nu 'skjult' / 'udvalgte' / 'alle' + en liste af
@@ -2749,6 +2791,10 @@ function progressSubtab(tab) {
 function refreshDashboardNotifications() {
   const goalCount = renderGoalNotifications();
   const bookingCount = renderBookingNotifications();
+  // Fødselsdage tælles bevidst IKKE med i badge-tallet (goal-badge) — det er en
+  // rolig, informativ liste, ikke noget der kræver handling som mål/bookinger.
+  renderBirthdayNotifications();
+  renderCoachTasksSection();
   updateGoalBadges(goalCount + bookingCount);
 }
 
@@ -5129,6 +5175,11 @@ function renderDetailSettings(clientId) {
     <div class="field"><label>PIN (6 cifre)</label><input type="number" id="set-pin-${clientId}" value="${client.pin}"></div>
     <div class="field"><label>Højde (cm) — bruges til BMI under Udvikling</label><input type="number" id="set-height-${clientId}" value="${client.heightCm || ''}" placeholder="fx 172"></div>
     <div class="field"><label>Fødselsår — bruges til BMR/kalorieberegning</label><input type="number" id="set-birthyear-${clientId}" value="${client.birthYear || ''}" placeholder="fx 1988"></div>
+    <div class="field-row" style="display:flex;gap:10px">
+      <div class="field" style="flex:1"><label>Fødselsdag</label><input type="number" min="1" max="31" id="set-birthday-${clientId}" value="${client.birthDay || ''}" placeholder="fx 24"></div>
+      <div class="field" style="flex:1"><label>Fødselsmåned</label><input type="number" min="1" max="12" id="set-birthmonth-${clientId}" value="${client.birthMonth || ''}" placeholder="fx 12"></div>
+    </div>
+    <div class="card-sub" style="margin:-8px 0 12px">Dag/måned bruges til fødselsdags-påmindelser — ikke nødvendigt for BMR.</div>
     <div class="field"><label>Køn — bruges til BMR/kalorieberegning</label>
       <select id="set-sex-${clientId}">
         <option value="" ${!client.sex ? 'selected' : ''}>Vælg...</option>
@@ -5238,6 +5289,10 @@ function saveClientSettings(clientId) {
   client.heightCm = heightVal ? parseFloat(heightVal) : null;
   const birthYearVal = document.getElementById('set-birthyear-' + clientId).value.trim();
   client.birthYear = birthYearVal ? parseInt(birthYearVal, 10) : null;
+  const birthDayVal = document.getElementById('set-birthday-' + clientId).value.trim();
+  client.birthDay = birthDayVal ? parseInt(birthDayVal, 10) : null;
+  const birthMonthVal = document.getElementById('set-birthmonth-' + clientId).value.trim();
+  client.birthMonth = birthMonthVal ? parseInt(birthMonthVal, 10) : null;
   client.sex = document.getElementById('set-sex-' + clientId).value || null;
   const palVal = document.getElementById('set-pal-' + clientId).value;
   client.pal = palVal ? parseFloat(palVal) : null;
@@ -5259,6 +5314,10 @@ function deleteClient(clientId) {
   DATA.runLogs = (DATA.runLogs || []).filter(r => r.clientId !== clientId);
   DATA.appointments = DATA.appointments.filter(a => a.clientId !== clientId);
   DATA.sessionCredits = (DATA.sessionCredits || []).filter(s => s.clientId !== clientId);
+  // Opgaven selv slettes ikke (matcher DB'ens "on delete set null") — kun
+  // klient-tilknytningen fjernes, da en huskeliste-post stadig er relevant
+  // for coachen selvom klienten er væk.
+  (DATA.coachTasks || []).forEach(t => { if (t.clientId === clientId) t.clientId = null; });
   save();
   backToCoachDashboard();
 }
@@ -5436,6 +5495,17 @@ function renderClientApp(client) {
 function renderClientHome() {
   const clientId = currentUser;
   const client = DATA.clients.find(c => c.id === clientId);
+
+  const birthdayEl = document.getElementById('client-home-birthday-banner');
+  if (birthdayEl) {
+    const age = turningAge(client);
+    birthdayEl.innerHTML = isBirthdayToday(client)
+      ? `<div class="card" style="margin-bottom:16px;background:var(--accent);text-align:center">
+          <div style="color:#111;font-weight:800;font-size:15px">🎉 Tillykke med ${age != null ? `de ${age} år` : 'fødselsdagen'}, ${escapeHtml(client.name)}!</div>
+        </div>`
+      : '';
+  }
+
   const focusEl = document.getElementById('client-home-focus');
   if (focusEl) {
     focusEl.innerHTML = (client.focusEnabled && (client.focusOverall || client.focusCurrent))
@@ -6829,6 +6899,110 @@ function dismissGoalNotification(clientId, key) {
 function goToClientMessages(clientId) {
   coachNav('checkins');
   openMessagesForClient(clientId);
+}
+
+// ══════════════════════════════════════
+// FØDSELSDAGS-PÅMINDELSER (2026-08-13) — ny funktion, portet fra rc-mobile
+// (bygget der først, matcher Runes ønske om ~1 måned før, 1 uge før, og på
+// dagen). Rent nyt: ingen del af dette fandtes i webappen tidligere.
+// ══════════════════════════════════════
+function isBirthdayToday(client, today = new Date()) {
+  if (!client.birthMonth || !client.birthDay) return false;
+  return today.getMonth() + 1 === client.birthMonth && today.getDate() === client.birthDay;
+}
+function turningAge(client, today = new Date()) {
+  return client.birthYear ? today.getFullYear() - client.birthYear : null;
+}
+function daysUntilBirthday(client, today = new Date()) {
+  if (!client.birthMonth || !client.birthDay) return null;
+  const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let next = new Date(today.getFullYear(), client.birthMonth - 1, client.birthDay);
+  if (next < todayMidnight) next = new Date(today.getFullYear() + 1, client.birthMonth - 1, client.birthDay);
+  return Math.round((next - todayMidnight) / 86400000);
+}
+function getUpcomingBirthdays(withinDays = 31) {
+  return DATA.clients
+    .map(c => ({ clientId: c.id, clientName: c.name, daysUntil: daysUntilBirthday(c), turningAge: turningAge(c) }))
+    .filter(b => b.daysUntil !== null && b.daysUntil <= withinDays)
+    .sort((a, b) => a.daysUntil - b.daysUntil);
+}
+function renderBirthdayNotifications() {
+  const upcoming = getUpcomingBirthdays();
+  const el = document.getElementById('coach-birthday-notifications');
+  if (!el) return 0;
+  if (!upcoming.length) { el.style.display = 'none'; el.innerHTML = ''; return 0; }
+  el.style.display = 'block';
+  el.innerHTML = `<div class="section-head">🎂 Fødselsdage</div>` + upcoming.map(b => `
+    <div class="card" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+      <div style="font-weight:700">${escapeHtml(b.clientName)}${b.turningAge != null ? ` (fylder ${b.turningAge})` : ''}</div>
+      <div style="font-size:13px;font-weight:700;color:${b.daysUntil === 0 ? 'var(--accent)' : 'var(--gray)'}">${b.daysUntil === 0 ? 'I DAG' : b.daysUntil === 1 ? 'i morgen' : `om ${b.daysUntil} dage`}</div>
+    </div>`).join('');
+  return upcoming.length;
+}
+
+// ══════════════════════════════════════
+// COACHENS EGNE UGENTLIGE OPGAVER (2026-08-13) — ny funktion, portet fra
+// rc-mobile. Personlig huskeliste, aldrig synlig for klienten (ingen
+// client-RLS-policy overhovedet på coach_tasks). Ugentligt tilbagevendende
+// via day_of_week — ingen "færdig"-tilstand, dukker bare op igen hver uge.
+// ══════════════════════════════════════
+const WEEKDAY_LABELS = ['Søndag', 'Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag'];
+
+function renderCoachTasksSection() {
+  const el = document.getElementById('coach-tasks-section');
+  if (!el) return;
+  const todayDow = new Date().getDay();
+  const tasks = DATA.coachTasks || [];
+  const today = tasks.filter(t => t.dayOfWeek === todayDow);
+  const rest = tasks.filter(t => t.dayOfWeek !== todayDow).sort((a, b) => a.dayOfWeek - b.dayOfWeek);
+  const clientName = id => { const c = DATA.clients.find(c => c.id === id); return c ? c.name : '?'; };
+
+  const rowsHtml = today.map(t => `
+    <div class="card" style="margin-bottom:6px;background:var(--accent);display:flex;justify-content:space-between;align-items:center">
+      <div style="color:#111;font-weight:700;font-size:13px">I DAG — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
+      <button class="btn-icon" style="color:#111" onclick="deleteCoachTask(${t.id})">×</button>
+    </div>`).join('') + rest.map(t => `
+    <div class="card" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:13px">${WEEKDAY_LABELS[t.dayOfWeek]} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
+      <button class="btn-icon" onclick="deleteCoachTask(${t.id})">×</button>
+    </div>`).join('');
+
+  el.innerHTML = `
+    <div class="section-head" style="display:flex;justify-content:space-between;align-items:center">
+      <span>📌 Dine opgaver</span>
+      <button class="btn btn-sm" onclick="openAddCoachTask()">+ Tilføj</button>
+    </div>
+    ${rowsHtml || '<div class="card-sub" style="margin:4px 0 8px">Ingen opgaver sat endnu.</div>'}
+  `;
+}
+
+function openAddCoachTask() {
+  document.getElementById('ct-title').value = '';
+  document.getElementById('ct-day').innerHTML = WEEKDAY_LABELS
+    .map((l, i) => `<option value="${i}" ${i === new Date().getDay() ? 'selected' : ''}>${l}</option>`).join('');
+  document.getElementById('ct-client').innerHTML = '<option value="">Ingen klient</option>' +
+    DATA.clients.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  document.getElementById('modal-coach-task').classList.add('open');
+}
+
+function saveCoachTask() {
+  const title = document.getElementById('ct-title').value.trim();
+  if (!title) { alert('Skriv en opgave først'); return; }
+  const day = parseInt(document.getElementById('ct-day').value, 10);
+  const clientVal = document.getElementById('ct-client').value;
+  if (!DATA.coachTasks) DATA.coachTasks = [];
+  DATA.coachTasks.push({ id: genId(), clientId: clientVal ? parseInt(clientVal, 10) : null, title, dayOfWeek: day });
+  save();
+  closeModal('modal-coach-task');
+  renderCoachTasksSection();
+  showToast('Opgave gemt');
+}
+
+function deleteCoachTask(id) {
+  DATA.coachTasks = (DATA.coachTasks || []).filter(t => t.id !== id);
+  pendingDeletes.coachTasks.add(id);
+  save();
+  renderCoachTasksSection();
 }
 
 // Widget vist på klientens hjemmeskærm og hos coachen under en klient. isCoachView=true
