@@ -6097,6 +6097,10 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
       <div class="field"><label>Vægt (kg)</label><input type="number" step="0.1" inputmode="decimal" id="bm-weight-${panelId}" placeholder="fx 78.5"></div>
       <div class="field"><label>Højde (cm)</label><input type="number" step="1" inputmode="decimal" id="bm-height-${panelId}" value="${client.heightCm || ''}" placeholder="fx 172"></div>
       <div class="field"><label>Fødselsår</label><input type="number" step="1" inputmode="numeric" id="bm-birthyear-${panelId}" value="${client.birthYear || ''}" placeholder="fx 1988"></div>
+      <div class="field-row" style="display:flex;gap:10px">
+        <div class="field" style="flex:1"><label>Fødselsdag</label><input type="number" min="1" max="31" id="bm-birthday-${panelId}" value="${client.birthDay || ''}" placeholder="fx 24"></div>
+        <div class="field" style="flex:1"><label>Fødselsmåned</label><input type="number" min="1" max="12" id="bm-birthmonth-${panelId}" value="${client.birthMonth || ''}" placeholder="fx 12"></div>
+      </div>
       <div class="field"><label>Køn</label>
         <select id="bm-sex-${panelId}">
           <option value="" ${!client.sex ? 'selected' : ''}>Vælg...</option>
@@ -6295,6 +6299,8 @@ function saveBodyMetric(clientId, panelId) {
   const weightVal = parseFloat(document.getElementById('bm-weight-' + panelId).value);
   const heightRaw = document.getElementById('bm-height-' + panelId).value;
   const birthYearRaw = document.getElementById('bm-birthyear-' + panelId).value;
+  const birthDayRaw = document.getElementById('bm-birthday-' + panelId).value;
+  const birthMonthRaw = document.getElementById('bm-birthmonth-' + panelId).value;
   const sexRaw = document.getElementById('bm-sex-' + panelId).value;
   const dateEl = document.getElementById('bm-date-' + panelId);
   const chosenDate = (dateEl && dateEl.value) || new Date().toISOString().split('T')[0];
@@ -6302,6 +6308,8 @@ function saveBodyMetric(clientId, panelId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (heightRaw !== '') client.heightCm = parseFloat(heightRaw);
   if (birthYearRaw !== '') client.birthYear = parseInt(birthYearRaw, 10);
+  if (birthDayRaw !== '') client.birthDay = parseInt(birthDayRaw, 10);
+  if (birthMonthRaw !== '') client.birthMonth = parseInt(birthMonthRaw, 10);
   if (sexRaw !== '') client.sex = sexRaw;
   if (!DATA.bodyMetrics) DATA.bodyMetrics = [];
   const existing = DATA.bodyMetrics.find(m => m.clientId === clientId && m.date === chosenDate);
