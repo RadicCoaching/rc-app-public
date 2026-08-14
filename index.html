@@ -3739,6 +3739,7 @@ function renderClientBookingSlots() {
   if (!myBookings.length) {
     html += '<div class="card-sub">Ingen bookede tider endnu.</div>';
   } else {
+    html += `<button class="btn btn-block" style="margin-bottom:10px" onclick="downloadMyBookingsICS()">📅 Tilføj alle til kalender</button>`;
     html += myBookings.map(s => `<div class="card" style="margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <div style="min-width:0">
@@ -3750,6 +3751,23 @@ function renderClientBookingSlots() {
     </div>`).join('');
   }
   el.innerHTML = html;
+}
+
+// Rune: "hvorfor kan jeg ikke tage mine aftaler og hente dem til egen
+// kalender ligesom på web versionen?" — bookingSlot-systemet (i modsætning
+// til det ældre DATA.appointments) havde slet ingen kalender-eksport for
+// klienten, hverken her eller i appen. Samme wrapICS()/slotToICSEvent() som
+// coachens downloadAllBookingsICS(), her uden klientnavn i titlen (client=null
+// — det er jo klientens egen kalender).
+function downloadMyBookingsICS() {
+  const clientId = currentUser;
+  const now = new Date().toISOString().split('T')[0];
+  const myBookings = (DATA.bookingSlots || [])
+    .filter(s => s.status === 'booket' && s.bookedByClientId === clientId && s.date >= now)
+    .sort((a,b) => a.date.localeCompare(b.date));
+  if (!myBookings.length) { showToast('Ingen bookede tider'); return; }
+  const events = myBookings.map(s => slotToICSEvent(s, null));
+  downloadICSFile('rc-mine-bookinger.ics', wrapICS(events));
 }
 
 // Atomisk booking: betinget update der kun rammer rækken hvis den STADIG er 'ledig'.
