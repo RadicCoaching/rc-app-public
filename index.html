@@ -7740,8 +7740,18 @@ async function sendVideoMessageWeb() {
   btn.disabled = true;
   btn.textContent = 'Sender…';
   try {
-    const path = `${vmTargetClientId}/${genId()}.mp4`;
-    const { error: uploadError } = await sb.storage.from('video-messages').upload(path, vmFile, {
+    // Direkte klient-upload til Storage fejlede med "signature verification
+    // failed" (Storage verificerer appens login-JWT anderledes end resten af
+    // databasen) — går derfor via video-message-urls-Edge Function'en
+    // (service-role) for en signeret upload-URL/token i stedet, samme
+    // rettelse som i rc-mobile samme tur.
+    const { data: urlData, error: urlError } = await sb.functions.invoke('video-message-urls', {
+      body: { action: 'upload', client_id: vmTargetClientId },
+    });
+    if (urlError) throw urlError;
+    if (urlData && urlData.error) throw new Error(urlData.error);
+    const { path, token } = urlData;
+    const { error: uploadError } = await sb.storage.from('video-messages').uploadToSignedUrl(path, token, vmFile, {
       contentType: vmFile.type || 'video/mp4',
     });
     if (uploadError) throw uploadError;
@@ -7810,8 +7820,8 @@ async function revealVideoMessage(id, videoPath, isRecipient) {
   if (!slot) return;
   slot.innerHTML = '<div class="card-sub">Henter video…</div>';
   if (isRecipient) markVideoMessageViewedWeb(id);
-  const { data, error } = await sb.storage.from('video-messages').createSignedUrl(videoPath, 3600);
-  if (error || !data) { slot.innerHTML = '<div class="card-sub">Kunne ikke indlæse video</div>'; return; }
+  const { data, error } = await sb.functions.invoke('video-message-urls', { body: { action: 'view', path: videoPath } });
+  if (error || !data || data.error || !data.signedUrl) { slot.innerHTML = '<div class="card-sub">Kunne ikke indlæse video</div>'; return; }
   slot.innerHTML = `<video src="${data.signedUrl}" controls autoplay style="width:100%;max-height:260px;border-radius:var(--radius-sm)"></video>`;
 }
 
