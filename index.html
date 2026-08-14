@@ -971,6 +971,25 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   </div>
 </div>
 
+<!-- Coach: Rediger dato/tid/varighed/sted/note for én allerede oprettet tid (2026-08-14,
+     Runes ønske: "jeg skal også kunne rette lokation osv, som man ellers kan i
+     kalenderaftaler" — findes bevidst adskilt fra "Rediger synlighed"-modalen ovenfor,
+     som fortsat bruges til bulk-synlighedsændring). -->
+<div class="modal-overlay" id="modal-edit-slot-details">
+  <div class="modal">
+    <div class="modal-title">Rediger tid</div>
+    <div class="field"><label>Dato</label><input type="date" id="edit-slot-date"></div>
+    <div class="field"><label>Tidspunkt</label><input type="time" id="edit-slot-time"></div>
+    <div class="field"><label>Varighed (min)</label><input type="number" id="edit-slot-duration" value="60"></div>
+    <div class="field"><label>Sted</label><input type="text" id="edit-slot-location" placeholder="fx Lemvig Motionscenter"></div>
+    <div class="field"><label>Note</label><input type="text" id="edit-slot-note" placeholder="valgfri"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-edit-slot-details')">Annullér</button>
+      <button class="btn btn-primary" onclick="saveSlotDetails()">Gem</button>
+    </div>
+  </div>
+</div>
+
 <!-- Client: Exercise Detail -->
 <div class="modal-overlay" id="modal-exercise-detail">
   <div class="modal">
@@ -3419,6 +3438,45 @@ function editSingleSlotVisibility(slotId) {
   openSlotVisibilityModal();
 }
 
+// Rediger dato/tid/varighed/sted/note for én tid — se modal-edit-slot-details.
+// Adskilt fra synligheds-redigeringen ovenfor, som er bulk-orienteret.
+let editSlotDetailsId = null;
+function openEditSlotDetails(slotId) {
+  const s = (DATA.bookingSlots || []).find(x => x.id === slotId);
+  if (!s) return;
+  editSlotDetailsId = slotId;
+  document.getElementById('edit-slot-date').value = s.date;
+  document.getElementById('edit-slot-time').value = s.time || '';
+  document.getElementById('edit-slot-duration').value = s.durationMin || 60;
+  document.getElementById('edit-slot-location').value = s.location || '';
+  document.getElementById('edit-slot-note').value = s.note || '';
+  document.getElementById('modal-edit-slot-details').classList.add('open');
+}
+
+async function saveSlotDetails() {
+  const s = (DATA.bookingSlots || []).find(x => x.id === editSlotDetailsId);
+  if (!s) return;
+  const date = document.getElementById('edit-slot-date').value;
+  const time = document.getElementById('edit-slot-time').value;
+  if (!date || !time) { showToast('Angiv dato og tidspunkt'); return; }
+  s.date = date;
+  s.time = time;
+  s.durationMin = parseInt(document.getElementById('edit-slot-duration').value, 10) || 60;
+  s.location = document.getElementById('edit-slot-location').value.trim() || null;
+  s.note = document.getElementById('edit-slot-note').value.trim() || null;
+  save();
+  closeModal('modal-edit-slot-details');
+  renderCoachBookingSlots();
+  if (sb) {
+    try {
+      const { error } = await sb.from('booking_slots').update({
+        date: s.date, time: s.time, duration_min: s.durationMin, location: s.location, note: s.note
+      }).eq('id', s.id);
+      if (error) { console.error('Kunne ikke gemme tid i Supabase', error); showToast('⚠ Gemning fejlede i skyen: ' + (error.message || 'ukendt fejl')); }
+    } catch (err) { console.error('Kunne ikke gemme tid i Supabase', err); showToast('⚠ Gemning fejlede — prøv igen'); }
+  }
+}
+
 // Grupperer tider til visning: BOOKEDE tider samles øverst — tydeligt markeret med
 // accentfarvet venstrekant og grøn baggrundstone, så de springer i øjnene i forhold til
 // de ledige tider — mens ledige tider ligger samlet nedenunder. Gør det hurtigt at få
@@ -3444,9 +3502,11 @@ function slotToCardHtml(s) {
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
           ${isBooked
-            ? `<button class="btn-icon" title="Download .ics" onclick="downloadSlotICS(${s.id})">📥</button>
+            ? `<button class="btn-icon" title="Rediger tid" onclick="openEditSlotDetails(${s.id})">✎</button>
+               <button class="btn-icon" title="Download .ics" onclick="downloadSlotICS(${s.id})">📥</button>
                <button class="btn btn-sm btn-danger" onclick="coachCancelSlot(${s.id})">Frigiv</button>`
-            : `<button class="btn-icon" title="Rediger synlighed" onclick="editSingleSlotVisibility(${s.id})">✎</button>
+            : `<button class="btn-icon" title="Rediger tid" onclick="openEditSlotDetails(${s.id})">✎</button>
+               <button class="btn-icon" title="Rediger synlighed" onclick="editSingleSlotVisibility(${s.id})">👁</button>
                <button class="btn-icon" title="Slet" onclick="deleteSlot(${s.id})">✕</button>`}
         </div>
       </div>
