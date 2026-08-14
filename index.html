@@ -558,10 +558,12 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       </div>
       <div style="display:flex;gap:10px;margin:-8px 0 16px">
         <button class="btn" style="flex:1;justify-content:center" onclick="openScanTanitaModal(currentUser)">📷 Scan kropsanalyse</button>
+        <button class="btn" style="flex:1;justify-content:center" onclick="openVideoMessageModal(currentUser, false)">🎥 Videobesked</button>
       </div>
       <button class="btn btn-block" style="margin:-8px 0 4px;font-size:13px" onclick="registerBiometric('client', currentUser)">🔓 Aktivér Face ID/fingeraftryk-login på denne enhed</button>
       <button class="btn btn-block" style="margin-bottom:4px;font-size:13px" onclick="enablePushNotifications()">🔔 Aktivér notifikationer på denne enhed</button>
       <div class="card-sub push-status-el" style="margin-bottom:16px">Tjekker status...</div>
+      <div id="client-home-video-messages"></div>
       <div id="client-home-checkins"></div>
     </div>
     <div class="bottomnav">
@@ -1273,6 +1275,27 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     <div id="ts-past" style="margin-top:16px"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-scan-tanita')">Luk</button>
+    </div>
+  </div>
+</div>
+
+<!-- Videobesked (Rune, 2026-08-14): "snap funktionen, hvor man skal kunne checkin
+     med en video" — selvstændig funktion, fælles modal for coach og klient,
+     se openVideoMessageModal(). -->
+<div class="modal-overlay" id="modal-video-message">
+  <div class="modal">
+    <div class="modal-title">Videobesked 🎥</div>
+    <div class="field"><label>Video (max ca. 60 sekunder)</label>
+      <input type="file" accept="video/*" capture="user" id="vm-file-input" onchange="handleVideoMessageFile(this)">
+      <div id="vm-preview" style="margin-top:8px"></div>
+    </div>
+    <div class="field"><label>Besked (valgfrit)</label>
+      <textarea id="vm-caption" placeholder="Skriv evt. en kort besked til videoen..."></textarea>
+    </div>
+    <div id="vm-error" class="card-sub" style="color:var(--danger);margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-video-message')">Annullér</button>
+      <button class="btn btn-primary" id="vm-send-btn" onclick="sendVideoMessageWeb()" disabled>Send</button>
     </div>
   </div>
 </div>
@@ -3171,6 +3194,8 @@ function renderMessagesThread(clientId, el) {
         <textarea id="coach-msg-input-${clientId}" placeholder="Skriv en besked..."></textarea>
       </div>
       <button class="btn btn-primary btn-block" onclick="sendCoachMessage(${clientId})">Send besked</button>
+      <button class="btn btn-block" style="margin-top:8px" onclick="openVideoMessageModal(${clientId}, true)">🎥 Send videobesked</button>
+      <div id="thread-video-messages" style="margin-top:12px"></div>
     </div>`;
   if (!cis.length) {
     html += '<div class="empty"><span class="empty-icon">📋</span><p>Ingen beskeder endnu — skriv den første ovenfor</p></div>';
@@ -3178,6 +3203,16 @@ function renderMessagesThread(clientId, el) {
     html += cis.map(ci => renderCheckinCard(ci, client, true)).join('');
   }
   el.innerHTML = html;
+  renderThreadVideoMessages(clientId);
+}
+
+async function renderThreadVideoMessages(clientId) {
+  const rows = await loadVideoMessages(clientId, 'coach');
+  if (currentMessagesClientId !== clientId) return; // coachen kan have skiftet tråd imens
+  const el = document.getElementById('thread-video-messages');
+  if (!el) return;
+  const client = DATA.clients.find(c => c.id === clientId);
+  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Dig' : (client ? client.name : 'Klient'), 'hideVideoMessageForCoach');
 }
 
 function sendCoachMessage(clientId) {
@@ -5739,6 +5774,19 @@ function renderClientHome() {
       ? `<button class="btn btn-primary btn-block" style="margin-bottom:16px" onclick="clientNav('checkin')">+ Ny check-in / besked</button>`
       : '';
   }
+  renderClientHomeVideoMessages(clientId);
+}
+
+// Video-beskeder (Rune, 2026-08-14) — egen tabel/hentning ved siden af
+// check-ins (se sendVideoMessageWeb()/loadVideoMessages() nedenfor). Asynkron,
+// kaldes efter selve renderClientHome()'s synkrone opbygning, samme mønster
+// som ts-quota i openScanTanitaModal().
+async function renderClientHomeVideoMessages(clientId) {
+  const el = document.getElementById('client-home-video-messages');
+  if (!el) return;
+  const rows = await loadVideoMessages(clientId, 'client');
+  if (currentUser !== clientId) return; // klienten kan have skiftet visning imens
+  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Rune' : 'Dig', 'hideVideoMessageForClient');
 }
 
 function resetCheckinForm() {
@@ -7611,6 +7659,121 @@ async function saveTanitaScan() {
   document.getElementById('ts-analyze-btn').style.display = 'none';
   document.getElementById('ts-results').innerHTML = '';
   await loadTanitaScanQuotaAndHistory(tsTargetClientId);
+}
+
+// ══════════════════════════════════════
+// VIDEOBESKED (Rune, 2026-08-14): "snap funktionen, hvor man skal kunne
+// checkin med en video, det er en nem kommunikatonsvej" — en selvstændig
+// funktion adskilt fra den daglige check-in, mere som en video-sms. Egen
+// tabel/bucket (video_messages / video-messages), delt modal for coach og
+// klient. Filoptag foregår via <input type="file" accept="video/*"
+// capture="user"> i stedet for MediaRecorder/getUserMedia — samme
+// browser-kompatible, filbaserede mønster som Tanita-fotoet, og matcher
+// Runes eget ønske om at kunne "downloade en fil" (her: optage/vælge en).
+// ══════════════════════════════════════
+let vmTargetClientId = null;
+let vmFromCoach = false;
+let vmFile = null;
+
+function openVideoMessageModal(clientId, fromCoach) {
+  vmTargetClientId = clientId;
+  vmFromCoach = fromCoach;
+  vmFile = null;
+  document.getElementById('vm-file-input').value = '';
+  document.getElementById('vm-preview').innerHTML = '';
+  document.getElementById('vm-caption').value = '';
+  document.getElementById('vm-error').textContent = '';
+  document.getElementById('vm-send-btn').disabled = true;
+  document.getElementById('modal-video-message').classList.add('open');
+}
+
+function handleVideoMessageFile(inputEl) {
+  const file = inputEl.files[0];
+  if (!file) return;
+  vmFile = file;
+  const url = URL.createObjectURL(file);
+  document.getElementById('vm-preview').innerHTML =
+    `<video src="${url}" controls style="width:100%;max-height:260px;border-radius:var(--radius-sm);border:1px solid var(--border)"></video>`;
+  document.getElementById('vm-send-btn').disabled = false;
+}
+
+async function sendVideoMessageWeb() {
+  if (!vmFile || !sb || !vmTargetClientId) return;
+  const btn = document.getElementById('vm-send-btn');
+  const errEl = document.getElementById('vm-error');
+  errEl.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Sender…';
+  try {
+    const path = `${vmTargetClientId}/${genId()}.mp4`;
+    const { error: uploadError } = await sb.storage.from('video-messages').upload(path, vmFile, {
+      contentType: vmFile.type || 'video/mp4',
+    });
+    if (uploadError) throw uploadError;
+    const caption = document.getElementById('vm-caption').value.trim();
+    const { error: insertError } = await sb.from('video_messages').insert({
+      id: genId(),
+      client_id: vmTargetClientId,
+      from_coach: vmFromCoach,
+      video_path: path,
+      duration_seconds: null,
+      caption: caption || null,
+    });
+    if (insertError) throw insertError;
+    closeModal('modal-video-message');
+    showToast('Video sendt ✅');
+    if (vmFromCoach) {
+      if (currentMessagesClientId === vmTargetClientId) renderThreadVideoMessages(vmTargetClientId);
+    } else {
+      renderClientHomeVideoMessages(vmTargetClientId);
+    }
+  } catch (e) {
+    errEl.textContent = (e && e.message) ? e.message : 'Kunne ikke sende videoen';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send';
+  }
+}
+
+// viewer: 'coach' filtrerer hidden_for_coach, 'client' filtrerer hidden_for_client —
+// hver part kan skjule en video fra egen visning uden at slette den for den anden.
+async function loadVideoMessages(clientId, viewer) {
+  if (!sb) return [];
+  let query = sb.from('video_messages')
+    .select('id, client_id, from_coach, video_path, duration_seconds, caption, created_at')
+    .eq('client_id', clientId)
+    .order('created_at', { ascending: false });
+  query = viewer === 'coach' ? query.eq('hidden_for_coach', false) : query.eq('hidden_for_client', false);
+  const { data, error } = await query;
+  return error ? [] : (data || []);
+}
+
+async function videoMessagesHtml(rows, senderLabelFn, hideFnName) {
+  if (!rows.length) return '';
+  const withUrls = await Promise.all(rows.map(async (v) => {
+    const { data } = await sb.storage.from('video-messages').createSignedUrl(v.video_path, 3600);
+    return { ...v, url: data ? data.signedUrl : null };
+  }));
+  return withUrls.map(v => `<div class="checkin-card">
+    <div class="checkin-header">
+      <div class="checkin-time">${fmtDate((v.created_at || '').split('T')[0])} · ${escapeHtml(senderLabelFn(v))}</div>
+      <button class="btn-icon" title="Fjern (kun fra din visning)" onclick="${hideFnName}(${v.id})">✕</button>
+    </div>
+    ${v.url ? `<video src="${v.url}" controls style="width:100%;max-height:260px;border-radius:var(--radius-sm);margin-top:6px"></video>` : '<div class="card-sub">Kunne ikke indlæse video</div>'}
+    ${v.caption ? `<div class="checkin-comment" style="margin-top:8px">"${escapeHtml(v.caption)}"</div>` : ''}
+  </div>`).join('');
+}
+
+async function hideVideoMessageForCoach(id) {
+  if (!confirm('Fjern denne video fra din visning? Klienten kan stadig se den.')) return;
+  await sb.from('video_messages').update({ hidden_for_coach: true }).eq('id', id);
+  if (currentMessagesClientId != null) renderThreadVideoMessages(currentMessagesClientId);
+}
+
+async function hideVideoMessageForClient(id) {
+  if (!confirm('Fjern denne video fra din visning? Din coach kan stadig se den.')) return;
+  await sb.from('video_messages').update({ hidden_for_client: true }).eq('id', id);
+  renderClientHomeVideoMessages(currentUser);
 }
 
 // ══════════════════════════════════════
