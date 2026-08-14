@@ -557,7 +557,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
         <button class="btn" style="flex:1;justify-content:center" onclick="openMealLogModal()">🍽️ Log måltid</button>
       </div>
       <div style="display:flex;gap:10px;margin:-8px 0 16px">
-        <button class="btn" style="flex:1;justify-content:center" onclick="openScanTanitaModal(currentUser)">📷 Scan kropsanalyse</button>
+        <button class="btn" id="client-scan-tanita-btn" style="flex:1;justify-content:center;display:none" onclick="openScanTanitaModal(currentUser)">📷 Scan kropsanalyse</button>
         <button class="btn" style="flex:1;justify-content:center" onclick="openVideoMessageModal(currentUser, false)">🎥 Videobesked</button>
       </div>
       <button class="btn btn-block" style="margin:-8px 0 4px;font-size:13px" onclick="registerBiometric('client', currentUser)">🔓 Aktivér Face ID/fingeraftryk-login på denne enhed</button>
@@ -1391,8 +1391,9 @@ function loadData() {
         if (!c.visibleStats) c.visibleStats = { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false };
         if (c.visibleStats.sessionsLeft === undefined) c.visibleStats.sessionsLeft = false;
         if (c.visibleStats.distanceKm === undefined) c.visibleStats.distanceKm = false;
-        if (!c.features) c.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false };
+        if (!c.features) c.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false };
         if (c.features.gpsTraining === undefined) c.features.gpsTraining = false;
+        if (c.features.tanitaScan === undefined) c.features.tanitaScan = false;
         if (c.focusEnabled === undefined) c.focusEnabled = false;
         if (c.focusOverall === undefined) c.focusOverall = '';
         if (c.focusCurrent === undefined) c.focusCurrent = '';
@@ -1685,6 +1686,7 @@ async function pushToSupabase() {
         feature_free_message: !!(c.features && c.features.freeMessage),
         feature_multiple_checkins: !!(c.features && c.features.multipleCheckins),
         feature_gps_training: !!(c.features && c.features.gpsTraining),
+        feature_tanita_scan: !!(c.features && c.features.tanitaScan),
         training_goals: c.trainingGoals || [],
         show_training_goal: !!c.showTrainingGoal,
         training_pause: c.trainingPause || null,
@@ -2051,7 +2053,8 @@ async function refreshFromSupabase() {
         checkins: c.feature_checkins !== undefined ? !!c.feature_checkins : true,
         freeMessage: c.feature_free_message !== undefined ? !!c.feature_free_message : true,
         multipleCheckins: !!c.feature_multiple_checkins,
-        gpsTraining: !!c.feature_gps_training
+        gpsTraining: !!c.feature_gps_training,
+        tanitaScan: !!c.feature_tanita_scan
       },
       notes: c.notes || '', autoReply: c.auto_reply || '',
       warmup: c.warmup || null,
@@ -5442,9 +5445,13 @@ function renderDetailSettings(clientId) {
         <button class="toggle ${client.features.multipleCheckins ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'multipleCheckins')"></button>
         <span class="toggle-label"><strong>Flere check-ins pr. dag</strong> — normalt kun én om dagen, slå til for klienter med fuld support</span>
       </div>
-      <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
         <button class="toggle ${client.features.gpsTraining ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'gpsTraining')"></button>
         <span class="toggle-label"><strong>Live GPS-træning</strong> — knap til GPS-guidet løb (distance/tid måles automatisk) direkte fra "Log træning"</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+        <button class="toggle ${client.features.tanitaScan ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'tanitaScan')"></button>
+        <span class="toggle-label"><strong>Scan kropsanalyse (Tanita m.fl.)</strong> — kan selv foto-scanne og gemme kropsanalyse-værdier</span>
       </div>
     </div>
     <div class="divider"></div>
@@ -5453,7 +5460,7 @@ function renderDetailSettings(clientId) {
 
 function toggleClientFeature(clientId, key) {
   const client = DATA.clients.find(c => c.id === clientId);
-  if (!client.features) client.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false };
+  if (!client.features) client.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false };
   client.features[key] = !client.features[key];
   save();
   renderDetailSettings(clientId);
@@ -5690,6 +5697,9 @@ function renderClientApp(client) {
 function renderClientHome() {
   const clientId = currentUser;
   const client = DATA.clients.find(c => c.id === clientId);
+
+  const scanBtnEl = document.getElementById('client-scan-tanita-btn');
+  if (scanBtnEl) scanBtnEl.style.display = (client.features && client.features.tanitaScan) ? 'flex' : 'none';
 
   const birthdayEl = document.getElementById('client-home-birthday-banner');
   if (birthdayEl) {
