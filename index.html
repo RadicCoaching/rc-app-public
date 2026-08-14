@@ -552,6 +552,9 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
         <button class="btn" style="flex:1;justify-content:center" onclick="openTrainingCheckinModal()">🏃 Log træning</button>
         <button class="btn" style="flex:1;justify-content:center" onclick="openMealLogModal()">🍽️ Log måltid</button>
       </div>
+      <div style="display:flex;gap:10px;margin:-8px 0 16px">
+        <button class="btn" style="flex:1;justify-content:center" onclick="openScanTanitaModal(currentUser)">📷 Scan kropsanalyse</button>
+      </div>
       <button class="btn btn-block" style="margin:-8px 0 4px;font-size:13px" onclick="registerBiometric('client', currentUser)">🔓 Aktivér Face ID/fingeraftryk-login på denne enhed</button>
       <button class="btn btn-block" style="margin-bottom:4px;font-size:13px" onclick="enablePushNotifications()">🔔 Aktivér notifikationer på denne enhed</button>
       <div class="card-sub push-status-el" style="margin-bottom:16px">Tjekker status...</div>
@@ -867,6 +870,11 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
         <button class="toggle ${DATA.distanceLoggingEnabled ? 'on' : ''}" id="settings-distance-logging-toggle" onclick="toggleDistanceLoggingEnabled()"></button>
         <span class="toggle-label"><strong>Aktivér for Løb, Gåtur og Cykling</strong></span>
       </div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title" style="margin-bottom:2px">📷 Scan kropsanalyse (Tanita m.fl.)</div>
+      <div class="card-sub" style="margin-bottom:10px">Månedlig grænse for foto-scanninger pr. klient (koster et AI-kald pr. scanning). Tomt felt = ingen grænse.</div>
+      <div class="field" style="margin-bottom:0"><label>Scanninger pr. klient pr. måned</label><input type="number" id="settings-tanita-scan-limit" placeholder="fx 2" value="${DATA.tanitaScanMonthlyLimit != null ? DATA.tanitaScanMonthlyLimit : ''}" onchange="saveTanitaScanLimit(this.value)"></div>
     </div>
     <button class="btn btn-block" style="margin-bottom:12px;font-size:13px" onclick="registerBiometric('coach', 'coach')">🔓 Aktivér Face ID/fingeraftryk-login på denne enhed</button>
     <button class="btn btn-block" style="margin-bottom:4px;font-size:13px" onclick="enablePushNotifications()">🔔 Aktivér notifikationer på denne enhed</button>
@@ -1243,6 +1251,28 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   </div>
 </div>
 
+<!-- Scan kropsanalyse (Tanita m.fl.) — foto sendes til AI, som læser alle synlige
+     tal og forklarer dem. Fælles for coach og klient, se openScanTanitaModal(). -->
+<div class="modal-overlay" id="modal-scan-tanita">
+  <div class="modal">
+    <div class="modal-title">Scan kropsanalyse 📷</div>
+    <div class="card-sub" id="ts-quota" style="margin-bottom:12px"></div>
+    <div id="ts-form">
+      <div class="field"><label>Foto af udskrift/skærm</label>
+        <input type="file" accept="image/*" capture="environment" id="ts-photo-input" onchange="handleTanitaScanPhoto(this)">
+        <div id="ts-photo-preview" style="margin-top:8px"></div>
+      </div>
+      <button class="btn btn-primary btn-block" id="ts-analyze-btn" style="display:none" onclick="analyzeTanitaScan()">✨ Læs værdier fra billedet</button>
+      <div id="ts-error" class="card-sub" style="color:var(--danger);margin-top:8px"></div>
+      <div id="ts-results" style="margin-top:12px"></div>
+    </div>
+    <div id="ts-past" style="margin-top:16px"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-scan-tanita')">Luk</button>
+    </div>
+  </div>
+</div>
+
 <!-- Fejring når ugens træningsmål er nået -->
 <div class="modal-overlay" id="modal-celebration">
   <div class="modal" style="text-align:center">
@@ -1433,7 +1463,12 @@ function loadData() {
     // Indstillinger. Når det slås til, kan de typer der er i distanceTypes logge km/tid
     // (og få pace/kcal) på samme måde som Løb allerede kunne.
     distanceLoggingEnabled: false,
-    distanceTypes: ['Løb', 'Gåtur', 'Cykling']
+    distanceTypes: ['Løb', 'Gåtur', 'Cykling'],
+    // Foto-scanning af kropsanalyse (Tanita m.fl., session 32/2026-08-14) —
+    // NULL = ingen grænse. Selve scanningerne (tanita_scans) caches bevidst
+    // IKKE lokalt/offline som resten af DATA — funktionen kræver internet
+    // (AI-kald) uanset hvad, så der er intet at vinde ved en offline-kø.
+    tanitaScanMonthlyLimit: 2
   };
 }
 
@@ -1579,7 +1614,8 @@ async function pushToSupabase() {
     await sb.from('coach_status').upsert({
       id: 1, pin: DATA.coachPin, online: DATA.coachStatus.online, offline_msg: DATA.coachStatus.offlineMsg,
       training_types: DATA.trainingTypes || [], celebration_photo: DATA.coachCelebrationPhoto || '',
-      distance_logging_enabled: !!DATA.distanceLoggingEnabled, distance_types: DATA.distanceTypes || []
+      distance_logging_enabled: !!DATA.distanceLoggingEnabled, distance_types: DATA.distanceTypes || [],
+      tanita_scan_monthly_limit: DATA.tanitaScanMonthlyLimit
     });
   });
 
@@ -1996,6 +2032,7 @@ async function refreshFromSupabase() {
       coachCelebrationPhoto: (coachRes.data && coachRes.data.celebration_photo) || '',
       distanceLoggingEnabled: !!(coachRes.data && coachRes.data.distance_logging_enabled),
       distanceTypes: (coachRes.data && coachRes.data.distance_types && coachRes.data.distance_types.length) ? coachRes.data.distance_types : ['Løb', 'Gåtur', 'Cykling'],
+      tanitaScanMonthlyLimit: (coachRes.data && coachRes.data.tanita_scan_monthly_limit !== undefined) ? coachRes.data.tanita_scan_monthly_limit : 2,
       exerciseLibrary: (libRes.data || []).map(e => ({ id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image: e.image_url || '' })),
       programTemplates: (tmplRes.data || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(t => ({ id: t.id, name: t.name, focus: t.focus || '', blocks: t.blocks || [] })),
       clients,
@@ -5265,6 +5302,12 @@ function renderDetailSettings(clientId) {
     </div>
     <div class="divider"></div>
     <div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="margin-bottom:2px">Scan kropsanalyse</div>
+      <div class="card-sub" style="margin-bottom:12px">Tag/vælg et foto af en Tanita-udskrift eller lignende — AI'en læser alle synlige tal (vægt, BMI, kropsfedt%, kropsalder, væskebalance m.fl.) og forklarer dem.</div>
+      <button class="btn btn-block" onclick="openScanTanitaModal(${clientId})">📷 Scan kropsanalyse</button>
+    </div>
+    <div class="divider"></div>
+    <div class="card" style="margin-bottom:16px">
       <div class="card-title" style="margin-bottom:2px">Al data (CSV)</div>
       <div class="card-sub" style="margin-bottom:12px">Eksportér kropsvægt, øvelsesvægte, velvære/søvn, kost og løb samlet i ét regneark — til at analysere eller trække ud efter behov.</div>
       <button class="btn btn-block" onclick="exportAllClientData(${clientId})">⬇ Eksportér al data (CSV)</button>
@@ -5530,6 +5573,13 @@ function toggleDistanceLoggingEnabled() {
   document.getElementById('settings-distance-logging-toggle').classList.toggle('on', DATA.distanceLoggingEnabled);
   save();
   showToast(DATA.distanceLoggingEnabled ? 'Km/tid-logning slået til' : 'Km/tid-logning slået fra');
+}
+
+function saveTanitaScanLimit(val) {
+  const trimmed = (val || '').trim();
+  DATA.tanitaScanMonthlyLimit = trimmed === '' ? null : (parseInt(trimmed, 10) || 0);
+  save();
+  showToast('Scanningsgrænse gemt');
 }
 
 function saveCoachSettings() {
@@ -7384,6 +7434,158 @@ function saveMealLog() {
   save();
   closeModal('modal-meal-log');
   showToast('Måltid logget');
+}
+
+// ══════════════════════════════════════
+// SCAN KROPSANALYSE (Tanita m.fl.) — foto → AI-udtræk, session 32/2026-08-14.
+// Portet fra rc-mobile (ScanTanitaScreen.tsx) samme tur, per den fælles
+// parity-regel. Skriver bevidst DIREKTE til Supabase uden om DATA/save()-
+// systemet, i modsætning til resten af appen — funktionen kræver internet
+// (AI-kald) uanset hvad, så der er intet at vinde ved at lade den indgå i
+// det offline-first cache-lag. Samme edge-function (analyze-tanita-scan)
+// som rc-mobile kalder.
+// ══════════════════════════════════════
+let tsPhotoDataUrl = null;
+let tsResult = null;
+let tsTargetClientId = null;
+
+function dataUrlToBase64(dataUrl) {
+  return dataUrl.split(',')[1] || '';
+}
+
+async function openScanTanitaModal(clientId) {
+  tsTargetClientId = clientId;
+  tsPhotoDataUrl = null;
+  tsResult = null;
+  document.getElementById('ts-photo-input').value = '';
+  document.getElementById('ts-photo-preview').innerHTML = '';
+  document.getElementById('ts-analyze-btn').style.display = 'none';
+  document.getElementById('ts-error').textContent = '';
+  document.getElementById('ts-results').innerHTML = '';
+  document.getElementById('ts-quota').textContent = 'Henter status…';
+  document.getElementById('ts-past').innerHTML = '';
+  document.getElementById('modal-scan-tanita').classList.add('open');
+  await loadTanitaScanQuotaAndHistory(clientId);
+}
+
+async function loadTanitaScanQuotaAndHistory(clientId) {
+  if (!sb) { document.getElementById('ts-quota').textContent = ''; return; }
+  const { data, error } = await sb.from('tanita_scans')
+    .select('id, date, weight_kg, bmi, values, created_at')
+    .eq('client_id', clientId)
+    .order('created_at', { ascending: false });
+  if (error) { document.getElementById('ts-quota').textContent = ''; return; }
+  const monthStart = new Date(); monthStart.setDate(1);
+  const monthStartStr = monthStart.toISOString().split('T')[0];
+  const usedThisMonth = (data || []).filter(s => (s.created_at || '') >= monthStartStr).length;
+  const limit = DATA.tanitaScanMonthlyLimit;
+  const quotaEl = document.getElementById('ts-quota');
+  quotaEl.textContent = limit != null ? `${usedThisMonth} af ${limit} scanninger brugt denne måned` : `${usedThisMonth} scanninger denne måned (ingen grænse sat)`;
+  const overLimit = limit != null && usedThisMonth >= limit;
+  document.getElementById('ts-form').style.display = overLimit ? 'none' : 'block';
+  if (overLimit) {
+    quotaEl.innerHTML += '<br><strong>Den månedlige grænse er nået.</strong>';
+  }
+  const pastEl = document.getElementById('ts-past');
+  if (data && data.length) {
+    pastEl.innerHTML = '<div class="card-title" style="margin-bottom:8px">Tidligere scanninger</div>' +
+      data.map(s => {
+        const summary = [s.weight_kg != null ? `${s.weight_kg} kg` : null, s.bmi != null ? `BMI ${s.bmi}` : null].filter(Boolean).join(' · ') || `${(s.values || []).length} værdier`;
+        return `<div class="card-sub" style="margin-bottom:6px">${fmtDate(s.date)} — ${escapeHtml(summary)}</div>`;
+      }).join('');
+  } else {
+    pastEl.innerHTML = '';
+  }
+}
+
+function handleTanitaScanPhoto(inputEl) {
+  const file = inputEl.files[0];
+  if (!file) return;
+  document.getElementById('ts-results').innerHTML = '';
+  document.getElementById('ts-error').textContent = '';
+  tsResult = null;
+  resizeImageFile(file, 1100, 0.85, dataUrl => {
+    tsPhotoDataUrl = dataUrl;
+    document.getElementById('ts-photo-preview').innerHTML = `<img src="${dataUrl}" style="width:100%;max-height:260px;object-fit:contain;border-radius:var(--radius-sm);border:1px solid var(--border)">`;
+    document.getElementById('ts-analyze-btn').style.display = 'block';
+  });
+}
+
+async function analyzeTanitaScan() {
+  if (!tsPhotoDataUrl || !sb) return;
+  const btn = document.getElementById('ts-analyze-btn');
+  const errEl = document.getElementById('ts-error');
+  errEl.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Analyserer…';
+  try {
+    const { data, error } = await sb.functions.invoke('analyze-tanita-scan', {
+      body: { image_base64: dataUrlToBase64(tsPhotoDataUrl), media_type: 'image/jpeg' }
+    });
+    if (error) {
+      let msg = error.message;
+      try {
+        const bodyText = await error.context.text();
+        const parsed = JSON.parse(bodyText);
+        if (parsed && parsed.error) msg = parsed.error;
+      } catch (e) {}
+      throw new Error(msg);
+    }
+    if (data && data.error) throw new Error(data.error);
+    tsResult = data;
+    renderTanitaResult(data);
+  } catch (e) {
+    errEl.textContent = (e && e.message) ? e.message : 'Kunne ikke analysere billedet';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ Læs værdier fra billedet';
+  }
+}
+
+function renderTanitaResult(result) {
+  const rows = [];
+  if (result.weight_kg != null) rows.push(`<div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--border)"><strong>Vægt</strong><span>${result.weight_kg} kg</span></div>`);
+  if (result.bmi != null) rows.push(`<div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--border)"><strong>BMI</strong><span>${result.bmi}</span></div>`);
+  (result.values || []).forEach(v => {
+    rows.push(`<div style="padding:8px 0;border-top:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between"><strong>${escapeHtml(v.label)}</strong><span>${escapeHtml(String(v.value))}${v.unit ? ' ' + escapeHtml(v.unit) : ''}</span></div>
+      <div class="card-sub" style="margin-top:2px">${escapeHtml(v.explanation || '')}</div>
+    </div>`);
+  });
+  const empty = result.weight_kg == null && result.bmi == null && (!result.values || !result.values.length);
+  document.getElementById('ts-results').innerHTML = `
+    <div class="card">
+      <div class="card-title" style="margin-bottom:4px">Fundne værdier — tjek de er rigtige</div>
+      ${empty ? '<div class="card-sub">Fandt ingen læsbare værdier — prøv et tydeligere billede.</div>' : rows.join('')}
+      <div style="display:flex;gap:10px;margin-top:16px">
+        <button class="btn" style="flex:1" onclick="document.getElementById('ts-results').innerHTML=''; tsResult=null;">Tag nyt billede</button>
+        <button class="btn btn-primary" style="flex:1" onclick="saveTanitaScan()">Gem</button>
+      </div>
+    </div>`;
+}
+
+async function saveTanitaScan() {
+  if (!tsResult || !sb || !tsTargetClientId) return;
+  const isCoachViewer = currentUser === 'coach';
+  const { error } = await sb.from('tanita_scans').insert({
+    id: genId(),
+    client_id: tsTargetClientId,
+    date: new Date().toISOString().split('T')[0],
+    weight_kg: tsResult.weight_kg,
+    bmi: tsResult.bmi,
+    photo_url: tsPhotoDataUrl,
+    values: tsResult.values || [],
+    created_by: isCoachViewer ? 'coach' : 'client'
+  });
+  if (error) { showToast('⚠ Kunne ikke gemme: ' + (error.message || 'ukendt fejl')); return; }
+  showToast('Scanning gemt ✅');
+  tsPhotoDataUrl = null;
+  tsResult = null;
+  document.getElementById('ts-photo-input').value = '';
+  document.getElementById('ts-photo-preview').innerHTML = '';
+  document.getElementById('ts-analyze-btn').style.display = 'none';
+  document.getElementById('ts-results').innerHTML = '';
+  await loadTanitaScanQuotaAndHistory(tsTargetClientId);
 }
 
 // ══════════════════════════════════════
