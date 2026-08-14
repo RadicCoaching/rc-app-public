@@ -135,6 +135,10 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 .note-icon-btn .note-dot{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--accent);border:2px solid var(--dark)}
 .btn-icon:disabled{opacity:.3;cursor:default}
 .btn-icon:active:not(:disabled){background:var(--accent);color:var(--black)}
+.row-move-btns{display:flex;flex-direction:column;gap:2px;flex-shrink:0;margin:0 4px}
+.row-move-btn{width:20px;height:16px;border-radius:3px;border:1px solid var(--border);background:var(--dark);color:var(--gray);font-size:9px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.row-move-btn:disabled{opacity:.25;cursor:default}
+.row-move-btn:active:not(:disabled){background:var(--accent);color:var(--black)}
 .drag-handle{cursor:grab;color:var(--lgray);font-size:15px;flex-shrink:0;user-select:none;letter-spacing:-1px}
 .picker-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
 .picker-item:last-child{border-bottom:none}
@@ -4681,6 +4685,21 @@ const TEMPLATE_BLOCK_EDITOR_IDS = { blocks: 'tmpl-blocks-editor', pickerWrap: 't
 const WARMUP_BLOCK_EDITOR_IDS = { blocks: 'warmup-blocks-editor', pickerWrap: 'warmup-inline-picker-wrap', pickerSearch: 'warmup-picker-search', pickerCat: 'warmup-picker-category-filter', pickerList: 'warmup-picker-list' };
 let blockEditorIds = PROGRAM_BLOCK_EDITOR_IDS;
 
+// Direkte op/ned-flyt af en blok i normalvisningen (uden at åbne "Redigér")
+// — bytter blot to nabo-blokke i p.blocks og gemmer med det samme.
+function moveProgramBlock(clientId, programId, index, direction) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  const program = client.programs.find(p => p.id === programId);
+  if (!program || !program.blocks) return;
+  const otherIndex = index + direction;
+  if (otherIndex < 0 || otherIndex >= program.blocks.length) return;
+  const tmp = program.blocks[index];
+  program.blocks[index] = program.blocks[otherIndex];
+  program.blocks[otherIndex] = tmp;
+  save();
+  renderDetailProgram(clientId);
+}
+
 function renderDetailProgram(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client.programs) client.programs = [];
@@ -4745,9 +4764,14 @@ function renderDetailProgram(clientId) {
     const cardsHtml = group.programs.map(p => {
       const exBlocks = (p.blocks || []).filter(b => b.type === 'exercise');
       const noteCount = exBlocks.filter(b => b.note && b.note.trim()).length;
-      const rowsHtml = (p.blocks || []).map(b => {
+      const blockCount = (p.blocks || []).length;
+      const rowsHtml = (p.blocks || []).map((b, bi) => {
+        const moveBtns = `<div class="row-move-btns">
+          <button class="row-move-btn" title="Flyt op" ${bi === 0 ? 'disabled' : ''} onclick="event.stopPropagation(); moveProgramBlock(${clientId}, ${p.id}, ${bi}, -1)">▲</button>
+          <button class="row-move-btn" title="Flyt ned" ${bi === blockCount - 1 ? 'disabled' : ''} onclick="event.stopPropagation(); moveProgramBlock(${clientId}, ${p.id}, ${bi}, 1)">▼</button>
+        </div>`;
         if (b.type === 'header') {
-          return `<div class="section-head">${escapeHtml(b.text)}</div>`;
+          return `<div class="section-head" style="display:flex;align-items:center;justify-content:space-between">${escapeHtml(b.text)}${moveBtns}</div>`;
         }
         const ex = (DATA.exerciseLibrary || []).find(e => e.id === b.libraryId);
         const name = ex ? ex.name : '(slettet øvelse)';
@@ -4758,6 +4782,7 @@ function renderDetailProgram(clientId) {
             <div class="exercise-row-name">${escapeHtml(name)}${b.ss ? `<span class="ss-tag">${escapeHtml(b.ss)}</span>` : ''}</div>
             ${b.setsReps ? `<div class="exercise-row-sets">${escapeHtml(b.setsReps)}</div>` : ''}
           </div>
+          ${moveBtns}
           <button class="note-icon-btn ${hasNote ? 'has-note' : ''}" title="${hasNote ? 'Se/redigér note' : 'Tilføj note'}" onclick="event.stopPropagation(); openExerciseNoteModal(${clientId}, ${p.id}, ${b.id})">
             📝${hasNote ? '<span class="note-dot"></span>' : ''}
           </button>
