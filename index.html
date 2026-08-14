@@ -610,6 +610,12 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
           <div class="card-sub">Telefonen sporer distance og tid via GPS hele turen, indtil du trykker Stop.</div>
         </div>
 
+        <div id="gt-pace-fields" style="display:none">
+          <div class="field"><label>Mål-pace pr. km (valgfrit)</label><input type="text" id="gt-target-pace" placeholder="fx 7:00"></div>
+          <div class="field"><label>Tolerance (sek)</label><input type="number" min="0" step="1" inputmode="numeric" id="gt-tolerance" value="20"></div>
+          <div class="card-sub" style="margin:2px 0 16px">Du får besked (stemme + vibration), hvis din pace afviger mere end tolerancen fra mål-pacen.</div>
+        </div>
+
         <div id="gt-interval-fields" style="display:none">
           <div class="field"><label>Antal intervaller</label><input type="number" min="1" step="1" inputmode="numeric" id="gt-count" placeholder="fx 8"></div>
           <div class="field"><label>Distance pr. interval (meter)</label><input type="number" min="1" step="1" inputmode="numeric" id="gt-dist" placeholder="fx 400"></div>
@@ -651,6 +657,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       </div>
 
       <div id="gt-secondary" style="margin-top:18px;font-size:16px;font-weight:700;color:var(--white)"></div>
+      <div id="gt-pace" style="display:none;margin-top:6px;font-size:15px;font-weight:700;color:var(--white)"></div>
       <div id="gt-next-up" style="margin-top:6px;font-size:13px;color:var(--gray);text-align:center"></div>
 
       <div style="position:absolute;bottom:0;left:0;right:0;padding:20px;display:flex;gap:10px">
@@ -8106,6 +8113,56 @@ let gtWakeLock = null;
 let gtTickHandle = null;
 let gtWorkDurations = []; // faktisk målt tid pr. work-interval, til gennemsnit bagefter
 
+// Mål-pace (Rune: "at man kan holde et bestemt pace, fx 7min pr km med en
+// difference på 20 sek til hver side") — valgfrit, kun for "Fast tur"-løb.
+// Portet fra rc-mobiles LiveRunScreen.tsx samme tur — se dens CHANGELOG.md.
+let gtTargetPaceSecPerKm = null;
+let gtTolerance = 20;
+let gtPaceSamples = []; // {d: kumuleret distance, t: timestamp}
+let gtPaceZone = null;  // 'in' | 'fast' | 'slow' | null
+let gtLastPaceAnnounceAt = 0;
+const GT_PACE_WINDOW_MS = 45000;
+const GT_PACE_MIN_WINDOW_M = 30;
+const GT_PACE_ANNOUNCE_COOLDOWN_MS = 20000;
+
+function gtParsePaceToSecPerKm(str) {
+  const s = (str || '').trim();
+  if (!s) return null;
+  const m = s.match(/^(\d+)[:.,](\d{1,2})$/);
+  if (m) return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  const n = parseFloat(s.replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 60) : null;
+}
+function gtFmtPace(secPerKm) {
+  if (secPerKm == null) return '--:--';
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${s.toString().padStart(2, '0')}/km`;
+}
+function gtUpdatePace() {
+  const paceEl = document.getElementById('gt-pace');
+  const now = Date.now();
+  gtPaceSamples = gtPaceSamples.filter(s => now - s.t <= GT_PACE_WINDOW_MS);
+  if (gtPaceSamples.length < 2) { paceEl.textContent = '--:--'; paceEl.style.color = 'var(--white)'; return; }
+  const first = gtPaceSamples[0], last = gtPaceSamples[gtPaceSamples.length - 1];
+  const deltaD = last.d - first.d;
+  const deltaT = (last.t - first.t) / 1000;
+  if (deltaD < GT_PACE_MIN_WINDOW_M || deltaT < 5) { paceEl.textContent = '--:--'; paceEl.style.color = 'var(--white)'; return; }
+  const currentPace = deltaT / (deltaD / 1000);
+  paceEl.textContent = gtFmtPace(currentPace);
+
+  if (gtTargetPaceSecPerKm == null) { paceEl.style.color = 'var(--white)'; return; }
+  const diff = currentPace - gtTargetPaceSecPerKm;
+  const zone = diff < -gtTolerance ? 'fast' : diff > gtTolerance ? 'slow' : 'in';
+  paceEl.style.color = zone === 'in' ? 'var(--accent)' : 'var(--danger)';
+  if (zone !== gtPaceZone && zone !== 'in' && now - gtLastPaceAnnounceAt > GT_PACE_ANNOUNCE_COOLDOWN_MS) {
+    gtSpeak(zone === 'fast' ? 'Sæt farten ned' : 'Sæt farten op');
+    gtBuzz([120, 60, 120]);
+    gtLastPaceAnnounceAt = now;
+  }
+  gtPaceZone = zone;
+}
+
 const GT_VERB = { 'Løb': 'Løb', 'Gåtur': 'Gå', 'Cykling': 'Cykl' };
 function gtVerb() { return GT_VERB[(gtReturnCtx && gtReturnCtx.type) || 'Løb'] || 'Løb'; }
 function gtMaxJump() { return (gtReturnCtx && gtReturnCtx.type === 'Cykling') ? 150 : 40; }
@@ -8118,6 +8175,9 @@ function gtOpenSetup() {
   // Interval-tilstand er bevidst kun for Løb, ligesom i den manuelle logning —
   // Gåtur/Cykling tilbydes kun "Fast tur".
   document.getElementById('gt-mode-interval').style.display = gtType === 'Løb' ? 'inline-flex' : 'none';
+  document.getElementById('gt-pace-fields').style.display = gtType === 'Løb' ? 'block' : 'none';
+  document.getElementById('gt-target-pace').value = '';
+  document.getElementById('gt-tolerance').value = '20';
   const prefill = gtType === 'Løb' && gtReturnCtx && gtReturnCtx.prefill;
   if (prefill) {
     gtSetMode('interval');
@@ -8153,10 +8213,12 @@ function gtCancelSetup() {
 
 function gtSetMode(mode) {
   gtMode = mode;
+  const gtType = (gtReturnCtx && gtReturnCtx.type) || 'Løb';
   document.getElementById('gt-mode-normal').classList.toggle('btn-primary', mode === 'normal');
   document.getElementById('gt-mode-interval').classList.toggle('btn-primary', mode === 'interval');
   document.getElementById('gt-normal-hint').style.display = mode === 'normal' ? 'block' : 'none';
   document.getElementById('gt-interval-fields').style.display = mode === 'interval' ? 'block' : 'none';
+  document.getElementById('gt-pace-fields').style.display = (mode === 'normal' && gtType === 'Løb') ? 'block' : 'none';
 }
 
 function gtHaversine(a, b) {
@@ -8220,6 +8282,18 @@ function gtStart() {
   gtStartWatch();
   document.getElementById('gt-setup-panel').style.display = 'none';
   document.getElementById('gt-live-panel').style.display = 'flex';
+
+  const gtType = (gtReturnCtx && gtReturnCtx.type) || 'Løb';
+  gtTargetPaceSecPerKm = gtMode === 'normal' ? gtParsePaceToSecPerKm(document.getElementById('gt-target-pace').value) : null;
+  gtTolerance = Math.max(0, parseInt(document.getElementById('gt-tolerance').value, 10) || 20);
+  gtPaceSamples = [];
+  gtPaceZone = null;
+  gtLastPaceAnnounceAt = 0;
+  const paceEl = document.getElementById('gt-pace');
+  paceEl.style.display = (gtMode === 'normal' && gtType === 'Løb') ? 'block' : 'none';
+  paceEl.textContent = '--:--';
+  paceEl.style.color = 'var(--white)';
+
   gtSetupStep(0, true);
   gtTickHandle = setInterval(gtTick, 1000);
 }
@@ -8233,6 +8307,7 @@ function gtStartWatch() {
       const d = gtHaversine(gtLastPos, p);
       if (d > 0.5 && d < gtMaxJump()) {
         gtTotalDistance += d;
+        gtPaceSamples.push({ d: gtTotalDistance, t: Date.now() });
         const cur = gtQueue[gtIndex];
         if (cur) {
           gtIntervalTraveled += d;
@@ -8326,6 +8401,7 @@ function gtFmtTime(sec) {
 function gtTick() {
   gtElapsedSec++;
   if (gtPaused) return;
+  if (gtMode === 'normal') gtUpdatePace();
   const it = gtQueue[gtIndex];
   if (!it) return;
   gtIntervalElapsedSec++;
