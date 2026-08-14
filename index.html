@@ -3219,7 +3219,7 @@ async function renderThreadVideoMessages(clientId) {
   const el = document.getElementById('thread-video-messages');
   if (!el) return;
   const client = DATA.clients.find(c => c.id === clientId);
-  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Dig' : (client ? client.name : 'Klient'), 'hideVideoMessageForCoach');
+  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Dig' : (client ? client.name : 'Klient'), 'hideVideoMessageForCoach', v => !v.from_coach);
 }
 
 function sendCoachMessage(clientId) {
@@ -5811,7 +5811,7 @@ async function renderClientHomeVideoMessages(clientId) {
   if (!el) return;
   const rows = await loadVideoMessages(clientId, 'client');
   if (currentUser !== clientId) return; // klienten kan have skiftet visning imens
-  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Rune' : 'Dig', 'hideVideoMessageForClient');
+  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Rune' : 'Dig', 'hideVideoMessageForClient', v => v.from_coach);
 }
 
 function resetCheckinForm() {
@@ -7765,7 +7765,7 @@ async function sendVideoMessageWeb() {
 async function loadVideoMessages(clientId, viewer) {
   if (!sb) return [];
   let query = sb.from('video_messages')
-    .select('id, client_id, from_coach, video_path, duration_seconds, caption, created_at')
+    .select('id, client_id, from_coach, video_path, duration_seconds, caption, created_at, viewed_at, video_deleted')
     .eq('client_id', clientId)
     .order('created_at', { ascending: false });
   query = viewer === 'coach' ? query.eq('hidden_for_coach', false) : query.eq('hidden_for_client', false);
@@ -7773,20 +7773,42 @@ async function loadVideoMessages(clientId, viewer) {
   return error ? [] : (data || []);
 }
 
-async function videoMessagesHtml(rows, senderLabelFn, hideFnName) {
+// Tap-til-at-se (Rune, 2026-08-14: "Snap fuktionen skal slette sig selv fra
+// serveren 15 min efter den er set"): videoen henter IKKE længere sin
+// signerede URL med det samme — kun et aktivt klik gør det, og (kun for
+// modtageren) markerer den som set. Se markVideoMessageViewedWeb() og
+// cleanup-video-messages-Edge Function'en (rc-mobile-repoet) for selve
+// 15-minutters-sletningen.
+async function videoMessagesHtml(rows, senderLabelFn, hideFnName, isRecipientFn) {
   if (!rows.length) return '';
-  const withUrls = await Promise.all(rows.map(async (v) => {
-    const { data } = await sb.storage.from('video-messages').createSignedUrl(v.video_path, 3600);
-    return { ...v, url: data ? data.signedUrl : null };
-  }));
-  return withUrls.map(v => `<div class="checkin-card">
+  return rows.map(v => `<div class="checkin-card">
     <div class="checkin-header">
       <div class="checkin-time">${fmtDate((v.created_at || '').split('T')[0])} · ${escapeHtml(senderLabelFn(v))}</div>
       <button class="btn-icon" title="Fjern (kun fra din visning)" onclick="${hideFnName}(${v.id})">✕</button>
     </div>
-    ${v.url ? `<video src="${v.url}" controls style="width:100%;max-height:260px;border-radius:var(--radius-sm);margin-top:6px"></video>` : '<div class="card-sub">Kunne ikke indlæse video</div>'}
+    <div id="vm-slot-${v.id}" style="margin-top:6px">
+      ${v.video_deleted
+        ? '<div class="card-sub" style="font-style:italic">🎥 Video udløbet — set for over 15 min siden</div>'
+        : `<button class="btn btn-block" onclick="revealVideoMessage(${v.id}, '${v.video_path}', ${isRecipientFn(v) ? 'true' : 'false'})">▶ Tryk for at se video</button>`}
+    </div>
     ${v.caption ? `<div class="checkin-comment" style="margin-top:8px">"${escapeHtml(v.caption)}"</div>` : ''}
   </div>`).join('');
+}
+
+async function revealVideoMessage(id, videoPath, isRecipient) {
+  const slot = document.getElementById('vm-slot-' + id);
+  if (!slot) return;
+  slot.innerHTML = '<div class="card-sub">Henter video…</div>';
+  if (isRecipient) markVideoMessageViewedWeb(id);
+  const { data, error } = await sb.storage.from('video-messages').createSignedUrl(videoPath, 3600);
+  if (error || !data) { slot.innerHTML = '<div class="card-sub">Kunne ikke indlæse video</div>'; return; }
+  slot.innerHTML = `<video src="${data.signedUrl}" controls autoplay style="width:100%;max-height:260px;border-radius:var(--radius-sm)"></video>`;
+}
+
+// .is('viewed_at', null) forhindrer at et gentaget klik nulstiller/forlænger
+// 15-minutters-vinduet — kun det FØRSTE tryk fra modtageren tæller.
+async function markVideoMessageViewedWeb(id) {
+  await sb.from('video_messages').update({ viewed_at: new Date().toISOString() }).eq('id', id).is('viewed_at', null);
 }
 
 async function hideVideoMessageForCoach(id) {
