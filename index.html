@@ -7886,6 +7886,7 @@ function renderTanitaResult(result) {
   document.getElementById('ts-results').innerHTML = `
     <div class="card">
       <div class="card-title" style="margin-bottom:4px">Fundne værdier — tjek de er rigtige</div>
+      <div class="field" style="margin:10px 0"><label>Dato for scanningen</label><input type="date" id="ts-scan-date" value="${new Date().toISOString().split('T')[0]}"></div>
       ${empty ? '<div class="card-sub">Fandt ingen læsbare værdier — prøv et tydeligere billede.</div>' : rows.join('')}
       <div style="display:flex;gap:10px;margin-top:16px">
         <button class="btn" style="flex:1" onclick="document.getElementById('ts-results').innerHTML=''; tsResult=null;">Tag nyt billede</button>
@@ -7897,10 +7898,15 @@ function renderTanitaResult(result) {
 async function saveTanitaScan() {
   if (!tsResult || !sb || !tsTargetClientId) return;
   const isCoachViewer = currentUser === 'coach';
+  // Rune: "kan man tilbagedatere tanita scanningerne så de kommer ind og kan
+  // vise en kurve?" — fx et gammelt papirudskrift fotograferet i dag, men
+  // hørende til en tidligere dato. Datofeltet defaulter til i dag men kan
+  // ændres, se renderTanitaResult().
+  const scanDate = document.getElementById('ts-scan-date').value || new Date().toISOString().split('T')[0];
   const { error } = await sb.from('tanita_scans').insert({
     id: genId(),
     client_id: tsTargetClientId,
-    date: new Date().toISOString().split('T')[0],
+    date: scanDate,
     weight_kg: tsResult.weight_kg,
     bmi: tsResult.bmi,
     photo_url: tsPhotoDataUrl,
