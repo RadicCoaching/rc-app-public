@@ -5433,9 +5433,12 @@ function renderDetailSettings(clientId) {
         const trainingDates = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId).map(t => t.date);
         const suggestion = suggestPalFromTrainingFrequency(trainingDates);
         if (!suggestion || suggestion.value === client.pal) return '';
+        const sessionWord = suggestion.sessionCount === 1 ? 'træning' : 'træninger';
         return `<div class="card-sub" style="background:var(--bg2);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;cursor:pointer" onclick="document.getElementById('set-pal-${clientId}').value='${suggestion.value}'">
-          Forslag ud fra træningslog: <strong>${escapeHtml(suggestion.label)}</strong>
-          (${suggestion.weeklyAvg.toFixed(1).replace('.', ',')} træninger/uge i snit, seneste 2 uger) — tryk for at bruge
+          Forslag: <strong>${escapeHtml(suggestion.label)}</strong>, fordi der er logget ${suggestion.sessionCount} ${sessionWord}
+          på de seneste ${suggestion.windowDays} dage (${suggestion.weeklyAvg.toFixed(1).replace('.', ',')}/uge i snit).
+          <div style="font-style:italic;margin-top:6px;font-size:11px">Baseret kun på træningsfrekvens — en Tanita-scan indgår ikke i selve dette forslag, kun i den mere præcise BMR-udregning klienten ser under sit forløb.</div>
+          <div style="margin-top:6px">— tryk for at bruge</div>
         </div>`;
       })()}
       <select id="set-pal-${clientId}">
@@ -6616,7 +6619,7 @@ function suggestPalFromTrainingFrequency(trainingDates, windowDays) {
   const recentCount = trainingDates.filter(d => d >= cutoffStr).length;
   const weeklyAvg = recentCount / (windowDays / 7);
   const tier = FREQUENCY_PAL_TIERS.find(t => weeklyAvg <= t.maxWeekly) || FREQUENCY_PAL_TIERS[FREQUENCY_PAL_TIERS.length - 1];
-  return { value: tier.value, label: tier.label, weeklyAvg: weeklyAvg };
+  return { value: tier.value, label: tier.label, weeklyAvg: weeklyAvg, sessionCount: recentCount, windowDays: windowDays };
 }
 
 function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent) {
