@@ -5435,7 +5435,7 @@ function renderDetailSettings(clientId) {
         if (!suggestion || suggestion.value === client.pal) return '';
         return `<div class="card-sub" style="background:var(--bg2);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;cursor:pointer" onclick="document.getElementById('set-pal-${clientId}').value='${suggestion.value}'">
           Forslag ud fra træningslog: <strong>${escapeHtml(suggestion.label)}</strong>
-          (${suggestion.weeklyAvg.toFixed(1).replace('.', ',')} træninger/uge i snit, seneste 4 uger) — tryk for at bruge
+          (${suggestion.weeklyAvg.toFixed(1).replace('.', ',')} træninger/uge i snit, seneste 2 uger) — tryk for at bruge
         </div>`;
       })()}
       <select id="set-pal-${clientId}">
@@ -6608,7 +6608,7 @@ const FREQUENCY_PAL_TIERS = [
 ];
 
 function suggestPalFromTrainingFrequency(trainingDates, windowDays) {
-  windowDays = windowDays || 28;
+  windowDays = windowDays || 14;
   if (!trainingDates.length) return null;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - windowDays);
