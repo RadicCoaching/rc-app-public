@@ -5429,6 +5429,15 @@ function renderDetailSettings(clientId) {
       </select>
     </div>
     <div class="field"><label>Aktivitetsniveau (PAL) — bruges til TDEE/kalorieforslag</label>
+      ${(() => {
+        const trainingDates = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId).map(t => t.date);
+        const suggestion = suggestPalFromTrainingFrequency(trainingDates);
+        if (!suggestion || suggestion.value === client.pal) return '';
+        return `<div class="card-sub" style="background:var(--bg2);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;cursor:pointer" onclick="document.getElementById('set-pal-${clientId}').value='${suggestion.value}'">
+          Forslag ud fra træningslog: <strong>${escapeHtml(suggestion.label)}</strong>
+          (${suggestion.weeklyAvg.toFixed(1).replace('.', ',')} træninger/uge i snit, seneste 4 uger) — tryk for at bruge
+        </div>`;
+      })()}
       <select id="set-pal-${clientId}">
         <option value="" ${!client.pal ? 'selected' : ''}>Vælg...</option>
         ${palOptions}
@@ -6389,6 +6398,15 @@ function mergeWeightPointsWithTanita(bodyMetricEntries, tanitaScans) {
 // Rune: "vil også gerne have metabolic age ind der et sted" — vises fra og
 // med FØRSTE scanning (svgLineChart tegner et enkelt punkt fint), ikke først
 // når der er to at sammenligne.
+function latestTanitaBodyFatPercent(tanitaScans) {
+  const sorted = [...(tanitaScans || [])].sort((a, b) => b.date.localeCompare(a.date));
+  for (const scan of sorted) {
+    const v = (scan.values || []).find(x => x.key === 'body_fat_percent');
+    if (v && typeof v.value === 'number') return v.value;
+  }
+  return null;
+}
+
 function extractTanitaValueSeries(tanitaScans) {
   const byKey = new Map();
   (tanitaScans || []).forEach(scan => {
@@ -6472,7 +6490,7 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
 
   if (stats.bmr || stats.kcal) {
     shownAnything = true;
-    html += renderBMRTDEECard(client, latest.weight, stats.bmr, stats.kcal);
+    html += renderBMRTDEECard(client, latest.weight, stats.bmr, stats.kcal, latestTanitaBodyFatPercent(tanitaScans));
   }
 
   // Rune: "der så på samme måde som alle andre fysiske data, kommer en
@@ -6559,8 +6577,50 @@ function computeBMR(client, weight) {
   return client.sex === 'm' ? base + 5 : base - 161;
 }
 
-function renderBMRTDEECard(client, weight, showBMR, showKcal) {
-  const bmr = computeBMR(client, weight);
+// Katch-McArdle: BMR = 370 + 21.6 × fedtfri masse (kg). Mere præcis end
+// Mifflin-St Jeor, fordi den bruger den FAKTISKE kropssammensætning i
+// stedet for at gætte ud fra vægt+alder+køn — kræver en fedtprocent, som
+// kun findes hvis klienten har en Tanita-scan. Portet fra rc-mobile
+// samme tur (Rune: "adaptiv tdee med tanita info").
+function computeBMRKatchMcArdle(weightKg, bodyFatPercent) {
+  const leanMassKg = weightKg * (1 - bodyFatPercent / 100);
+  return 370 + 21.6 * leanMassKg;
+}
+
+function computeBMRAuto(client, weight, bodyFatPercent) {
+  if (weight != null && bodyFatPercent != null) {
+    return { bmr: computeBMRKatchMcArdle(weight, bodyFatPercent), usedTanita: true };
+  }
+  return { bmr: computeBMR(client, weight), usedTanita: false };
+}
+
+// Auto-PAL-forslag (arbejdsdokument, Fase 1): ud fra klientens faktiske
+// loggede træningsfrekvens de seneste ~4 uger. KUN et forslag coachen selv
+// vælger at bruge. Bruger kun de PAL-niveauer hvis beskrivelse er en ren
+// træningsfrekvens — "Let-moderat" (1.45, "halvaktivt job") er bevidst
+// udeladt, appen har ikke data om jobtype.
+const FREQUENCY_PAL_TIERS = [
+  { value: 1.2, label: 'Stillesiddende', maxWeekly: 0.5 },
+  { value: 1.375, label: 'Let aktiv', maxWeekly: 3 },
+  { value: 1.55, label: 'Moderat', maxWeekly: 5 },
+  { value: 1.725, label: 'Meget aktiv', maxWeekly: 7 },
+  { value: 1.9, label: 'Atletisk', maxWeekly: Infinity },
+];
+
+function suggestPalFromTrainingFrequency(trainingDates, windowDays) {
+  windowDays = windowDays || 28;
+  if (!trainingDates.length) return null;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - windowDays);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+  const recentCount = trainingDates.filter(d => d >= cutoffStr).length;
+  const weeklyAvg = recentCount / (windowDays / 7);
+  const tier = FREQUENCY_PAL_TIERS.find(t => weeklyAvg <= t.maxWeekly) || FREQUENCY_PAL_TIERS[FREQUENCY_PAL_TIERS.length - 1];
+  return { value: tier.value, label: tier.label, weeklyAvg: weeklyAvg };
+}
+
+function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent) {
+  const { bmr, usedTanita } = computeBMRAuto(client, weight, bodyFatPercent || null);
   let html = '';
 
   if (showBMR) {
@@ -6571,7 +6631,7 @@ function renderBMRTDEECard(client, weight, showBMR, showKcal) {
       html += `<div class="section-head">BMR</div>
         <div class="card" style="text-align:center">
           <div style="font-family:'Inter',sans-serif;font-weight:900;font-size:32px;letter-spacing:-.02em;color:var(--white)">${Math.round(bmr)}</div>
-          <div class="card-sub" style="margin-top:2px">kcal i hvile</div>
+          <div class="card-sub" style="margin-top:2px">kcal i hvile${usedTanita ? ' · beregnet ud fra seneste Tanita-scan' : ''}</div>
         </div>`;
     }
   }
