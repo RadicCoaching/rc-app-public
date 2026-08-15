@@ -7631,13 +7631,7 @@ async function analyzeTanitaScan() {
       body: { image_base64: dataUrlToBase64(tsPhotoDataUrl), media_type: 'image/jpeg' }
     });
     if (error) {
-      let msg = error.message;
-      try {
-        const bodyText = await error.context.text();
-        const parsed = JSON.parse(bodyText);
-        if (parsed && parsed.error) msg = parsed.error;
-      } catch (e) {}
-      throw new Error(msg);
+      throw new Error(await extractFunctionErrorMessage(error));
     }
     if (data && data.error) throw new Error(data.error);
     tsResult = data;
@@ -7715,11 +7709,17 @@ let vmFile = null;
 // JSON-body automatisk — denne henter selv den rigtige besked fra
 // edge-functionen. Samme mønster som analyzeTanitaScan() bruger inline,
 // udskilt her til genbrug.
+// Tjekker BÅDE .error (vores egne Edge Functions' fejl-format) og
+// .message/.code (Supabase-GATEWAY'ens eget format, fx
+// {"code":"UNAUTHORIZED_LEGACY_JWT","message":"Invalid JWT"} — sendes hvis
+// kaldet slet ikke når vores funktionskode, men afvises allerede ved
+// login-tjekket foran den).
 async function extractFunctionErrorMessage(error) {
   try {
     const bodyText = await error.context.text();
     const parsed = JSON.parse(bodyText);
     if (parsed && parsed.error) return parsed.error;
+    if (parsed && parsed.message) return parsed.code ? `${parsed.message} (${parsed.code})` : parsed.message;
   } catch (e) {}
   return error.message || 'Ukendt fejl';
 }
