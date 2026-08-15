@@ -7612,6 +7612,8 @@ function saveMealLog() {
 let tsPhotoDataUrl = null;
 let tsResult = null;
 let tsTargetClientId = null;
+let tsPastScans = [];
+let tsExpandedScanId = null;
 
 function dataUrlToBase64(dataUrl) {
   return dataUrl.split(',')[1] || '';
@@ -7635,7 +7637,7 @@ async function openScanTanitaModal(clientId) {
 async function loadTanitaScanQuotaAndHistory(clientId) {
   if (!sb) { document.getElementById('ts-quota').textContent = ''; return; }
   const { data, error } = await sb.from('tanita_scans')
-    .select('id, date, weight_kg, bmi, values, created_at')
+    .select('id, date, weight_kg, bmi, values, photo_url, created_at')
     .eq('client_id', clientId)
     .order('created_at', { ascending: false });
   if (error) { document.getElementById('ts-quota').textContent = ''; return; }
@@ -7650,16 +7652,36 @@ async function loadTanitaScanQuotaAndHistory(clientId) {
   if (overLimit) {
     quotaEl.innerHTML += '<br><strong>Den månedlige grænse er nået.</strong>';
   }
+  tsPastScans = data || [];
+  tsExpandedScanId = null;
+  renderTanitaPastScans();
+}
+
+// Rune: "har lige tjekket, den gemmer reelt ikke billedet som er væk nu" —
+// billedet BLEV faktisk gemt korrekt, men blev aldrig vist igen nogen steder
+// efter gem, hverken her eller i rc-mobile. Tryk på en tidligere scanning for
+// at folde foto + alle værdier ud, i stedet for kun dato + ét sammendrag.
+function renderTanitaPastScans() {
   const pastEl = document.getElementById('ts-past');
-  if (data && data.length) {
-    pastEl.innerHTML = '<div class="card-title" style="margin-bottom:8px">Tidligere scanninger</div>' +
-      data.map(s => {
-        const summary = [s.weight_kg != null ? `${s.weight_kg} kg` : null, s.bmi != null ? `BMI ${s.bmi}` : null].filter(Boolean).join(' · ') || `${(s.values || []).length} værdier`;
-        return `<div class="card-sub" style="margin-bottom:6px">${fmtDate(s.date)} — ${escapeHtml(summary)}</div>`;
-      }).join('');
-  } else {
-    pastEl.innerHTML = '';
-  }
+  if (!tsPastScans.length) { pastEl.innerHTML = ''; return; }
+  pastEl.innerHTML = '<div class="card-title" style="margin-bottom:8px">Tidligere scanninger</div>' +
+    tsPastScans.map(s => {
+      const summary = [s.weight_kg != null ? `${s.weight_kg} kg` : null, s.bmi != null ? `BMI ${s.bmi}` : null].filter(Boolean).join(' · ') || `${(s.values || []).length} værdier`;
+      const expanded = tsExpandedScanId === String(s.id);
+      const valueRows = (s.values || []).map(v => `<div style="display:flex;justify-content:space-between;padding:4px 0"><span>${escapeHtml(v.label)}</span><strong>${escapeHtml(String(v.value))}${v.unit ? ' ' + escapeHtml(v.unit) : ''}</strong></div>`).join('');
+      const photoHtml = s.photo_url
+        ? `<img src="${s.photo_url}" style="width:100%;max-height:260px;object-fit:contain;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:8px">`
+        : '<div class="card-sub">Intet foto gemt for denne scanning.</div>';
+      return `<div class="card-sub" style="margin-bottom:6px;cursor:pointer" onclick="toggleTanitaPastScan(${JSON.stringify(String(s.id))})">
+        ${fmtDate(s.date)} — ${escapeHtml(summary)} ${expanded ? '▲' : '▼'}
+        ${expanded ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">${photoHtml}${valueRows}</div>` : ''}
+      </div>`;
+    }).join('');
+}
+
+function toggleTanitaPastScan(id) {
+  tsExpandedScanId = tsExpandedScanId === id ? null : id;
+  renderTanitaPastScans();
 }
 
 function handleTanitaScanPhoto(inputEl) {
