@@ -5411,6 +5411,14 @@ function renderDetailSettings(clientId) {
   const palOptions = PAL_LEVELS.map(p =>
     `<option value="${p.value}" ${client.pal === p.value ? 'selected' : ''}>${palDisplay(p.value)} — ${p.label} — ${p.desc}</option>`
   ).join('');
+  // Rune: "kan BMR så også vises sammen med, for det hele er jo også
+  // afgjort af ens størrelse osv som danner rammen for ens BMR som man
+  // ganger op med PAL?" — BMR/TDEE vist lige ved PAL-feltet.
+  const bodyMetricsSorted = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId).sort((a, b) => a.date.localeCompare(b.date));
+  const latestWeight = bodyMetricsSorted.length ? bodyMetricsSorted[bodyMetricsSorted.length - 1].weight : null;
+  const tanitaScansForBmr = getTanitaScansForClient(clientId, () => renderDetailSettings(clientId));
+  const { bmr, usedTanita: bmrUsedTanita } = computeBMRAuto(client, latestWeight, latestTanitaBodyFatPercent(tanitaScansForBmr));
+  const currentPalInfo = palInfo(client.pal);
   document.getElementById('detail-settings').innerHTML = `
     <div class="field"><label>Navn</label><input type="text" id="set-name-${clientId}" value="${client.name}"></div>
     <div class="field"><label>PIN (6 cifre)</label><input type="number" id="set-pin-${clientId}" value="${client.pin}"></div>
@@ -5429,15 +5437,27 @@ function renderDetailSettings(clientId) {
       </select>
     </div>
     <div class="field"><label>Aktivitetsniveau (PAL) — bruges til TDEE/kalorieforslag</label>
+      ${bmr === null
+        ? `<div class="card-sub" style="font-style:italic;margin-bottom:8px">Udfyld højde, fødselsår, køn og en vægt-måling for at se BMR/TDEE her.</div>`
+        : `<div class="card-sub" style="background:var(--bg2);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px">
+            BMR (kcal i hvile): <strong>${Math.round(bmr)}</strong>${bmrUsedTanita ? ' — ud fra seneste Tanita-scan' : ' — ud fra højde/vægt/alder/køn'}
+            ${currentPalInfo ? `<br>Nuværende TDEE (${escapeHtml(currentPalInfo.label)}, PAL ${currentPalInfo.value}): <strong>${Math.round(bmr * currentPalInfo.value)}</strong> kcal/dag` : ''}
+          </div>`
+      }
       ${(() => {
         const trainingDates = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId).map(t => t.date);
         const suggestion = suggestPalFromTrainingFrequency(trainingDates);
         if (!suggestion || suggestion.value === client.pal) return '';
         const sessionWord = suggestion.sessionCount === 1 ? 'træning' : 'træninger';
+        const suggestedPalInfo = palInfo(suggestion.value);
+        const tdeePreview = bmr !== null && suggestedPalInfo
+          ? `<div style="margin-top:6px">Ville give TDEE: <strong>${Math.round(bmr * suggestedPalInfo.value)}</strong> kcal/dag${currentPalInfo ? ` (mod ${Math.round(bmr * currentPalInfo.value)} nu)` : ''}</div>`
+          : '';
         return `<div class="card-sub" style="background:var(--bg2);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;cursor:pointer" onclick="document.getElementById('set-pal-${clientId}').value='${suggestion.value}'">
           Forslag: <strong>${escapeHtml(suggestion.label)}</strong>, fordi der er logget ${suggestion.sessionCount} ${sessionWord}
           på de seneste ${suggestion.windowDays} dage (${suggestion.weeklyAvg.toFixed(1).replace('.', ',')}/uge i snit).
-          <div style="font-style:italic;margin-top:6px;font-size:11px">Baseret kun på træningsfrekvens — en Tanita-scan indgår ikke i selve dette forslag, kun i den mere præcise BMR-udregning klienten ser under sit forløb.</div>
+          ${tdeePreview}
+          <div style="font-style:italic;margin-top:6px;font-size:11px">Baseret kun på træningsfrekvens — en Tanita-scan indgår ikke i selve dette forslag, kun i BMR ovenfor.</div>
           <div style="margin-top:6px">— tryk for at bruge</div>
         </div>`;
       })()}
