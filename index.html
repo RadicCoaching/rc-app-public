@@ -6355,6 +6355,50 @@ function svgMultiLineChart(seriesArray, opts) {
 }
 
 // ══════════════════════════════════════
+// TANITA-UDVIKLING (Rune: "for dem der bruger dette, så bliver deres
+// personlige krops data oplysninger udvidet... og der så på samme måde som
+// alle andre fysiske data, kommer en udviklingskurve") — tanita_scans ligger
+// bevidst uden for DATA/save()-cachen (se Session 34), så en klients
+// scanninger hentes/caches separat her, og bruges til at (a) flette vægt ind
+// i den almindelige vægt-graf og (b) tegne en kurve pr. talværdi der går
+// igen på tværs af scanninger (fedt%, muskelmasse osv. — forskellige
+// Tanita-modeller viser forskellige felter, så nøglerne opdages dynamisk).
+let tanitaScansByClient = {};
+let tanitaScansFetchPending = {};
+
+function getTanitaScansForClient(clientId, onLoaded) {
+  if (tanitaScansByClient[clientId]) return tanitaScansByClient[clientId];
+  if (!sb || tanitaScansFetchPending[clientId]) return null;
+  tanitaScansFetchPending[clientId] = true;
+  sb.from('tanita_scans').select('date, weight_kg, values').eq('client_id', clientId).order('date', { ascending: true })
+    .then(({ data, error }) => {
+      tanitaScansByClient[clientId] = error ? [] : (data || []);
+      tanitaScansFetchPending[clientId] = false;
+      if (onLoaded) onLoaded();
+    });
+  return null; // endnu ikke hentet — onLoaded kaldes når det er klar
+}
+
+function mergeWeightPointsWithTanita(bodyMetricEntries, tanitaScans) {
+  const byDate = new Map();
+  bodyMetricEntries.forEach(e => byDate.set(e.date, e.weight));
+  (tanitaScans || []).forEach(s => { if (s.weight_kg != null) byDate.set(s.date, Number(s.weight_kg)); });
+  return [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, value]) => ({ date, value }));
+}
+
+function extractTanitaValueSeries(tanitaScans) {
+  const byKey = new Map();
+  (tanitaScans || []).forEach(scan => {
+    (scan.values || []).forEach(v => {
+      if (typeof v.value !== 'number') return;
+      if (!byKey.has(v.key)) byKey.set(v.key, { key: v.key, label: v.label, unit: v.unit, points: [] });
+      byKey.get(v.key).points.push({ date: scan.date, value: v.value });
+    });
+  });
+  return [...byKey.values()].filter(s => s.points.length >= 2);
+}
+
+// ══════════════════════════════════════
 // UDVIKLING — KROP (vægt, fedt%, BMI)
 // ══════════════════════════════════════
 function renderProgressKrop(clientId, panelId, showForm, stats) {
@@ -6362,6 +6406,7 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
   const el = document.getElementById(panelId);
   const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId).sort((a,b) => a.date.localeCompare(b.date));
   stats = stats || { weight: false, bmi: false, bmr: false, kcal: false };
+  const tanitaScans = getTanitaScansForClient(clientId, () => renderProgressKrop(clientId, panelId, showForm, stats));
 
   let html = '';
   if (showForm) {
@@ -6387,18 +6432,24 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
     </div>`;
   }
 
-  if (!entries.length) {
+  // Rune: vægt fra en Tanita-scan skal flettes ind i SAMME graf som manuelle
+  // indtastninger, ikke vises separat — også hvis klienten kun bruger Tanita
+  // og aldrig taster en vægt ind manuelt.
+  const weightPoints = mergeWeightPointsWithTanita(entries, tanitaScans);
+
+  if (!entries.length && !weightPoints.length) {
     html += '<div class="empty"><span class="empty-icon">📈</span><p>Ingen målinger endnu</p></div>';
     el.innerHTML = html;
     return;
   }
 
-  const latest = entries[entries.length - 1];
+  const latest = entries.length
+    ? entries[entries.length - 1]
+    : { date: weightPoints[weightPoints.length - 1].date, weight: weightPoints[weightPoints.length - 1].value };
   let shownAnything = false;
 
   if (stats.weight) {
     shownAnything = true;
-    const weightPoints = entries.map(e => ({ date: e.date, value: e.weight }));
     html += `<div class="section-head">Vægt</div><div class="card">${svgLineChart(weightPoints, { color: CHART_COLORS.accent, unitSuffix: ' kg' })}</div>`;
   }
 
@@ -6419,6 +6470,19 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
   if (stats.bmr || stats.kcal) {
     shownAnything = true;
     html += renderBMRTDEECard(client, latest.weight, stats.bmr, stats.kcal);
+  }
+
+  // Rune: "der så på samme måde som alle andre fysiske data, kommer en
+  // udviklingskurve eller at man på anden måde kan se om der kommer mere
+  // eller mindre muskel masse osv" — kun værdier der går igen (mindst to
+  // scanninger) får en graf, uanset hvilken Tanita-model der bruges.
+  const tanitaSeries = extractTanitaValueSeries(tanitaScans);
+  if (tanitaSeries.length) {
+    shownAnything = true;
+    html += `<div class="section-head">Kropssammensætning (Tanita-scan)</div>`;
+    tanitaSeries.forEach(s => {
+      html += `<div class="card" style="margin-bottom:10px"><div class="card-title" style="margin-bottom:4px">${escapeHtml(s.label)}</div>${svgLineChart(s.points, { color: CHART_COLORS.blue, unitSuffix: s.unit ? ' ' + s.unit : '' })}</div>`;
+    });
   }
 
   if (!shownAnything) {
@@ -7765,6 +7829,9 @@ async function saveTanitaScan() {
   document.getElementById('ts-photo-preview').innerHTML = '';
   document.getElementById('ts-analyze-btn').style.display = 'none';
   document.getElementById('ts-results').innerHTML = '';
+  // Ryd Tanita-udviklings-cachen, så den nye scanning med det samme indgår i
+  // vægt-grafen og kropssammensætnings-kurverne, ikke først efter en genindlæsning.
+  delete tanitaScansByClient[tsTargetClientId];
   await loadTanitaScanQuotaAndHistory(tsTargetClientId);
 }
 
