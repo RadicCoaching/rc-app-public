@@ -2134,6 +2134,21 @@ if (sb) {
   } catch (err) {
     console.error('Kunne ikke oprette live-forbindelse til booking_slots', err);
   }
+
+  // Rune: sendte en videobesked som klient, mens coach-visningen allerede var
+  // åben — tråden genindlæste sig ikke af sig selv (samme rettelse som
+  // rc-mobile samme tur). video_messages er bevidst UDENFOR DATA/save()-
+  // cachen (se Session 34), så det almindelige 45-sek.-baggrundstjek rører
+  // den slet ikke — kræver derfor sin egen Realtime-kanal, ligesom booking.
+  try {
+    sb.channel('video_messages_live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'video_messages' }, () => {
+        rerenderCurrentView();
+      })
+      .subscribe();
+  } catch (err) {
+    console.error('Kunne ikke oprette live-forbindelse til video_messages', err);
+  }
 }
 
 // ── LØBENDE BAGGRUNDS-OPDATERING ──
