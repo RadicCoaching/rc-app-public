@@ -1959,6 +1959,32 @@ let coachDirtyCheckinIds = new Set();
 let clientSyncedRunLogIds = new Set();
 let clientSyncedTrainingCheckinIds = new Set();
 
+// Rune: "de er heller ikke som note på forsiden som coach at der er en
+// besked?" — video_messages ligger bevidst uden for DATA/save()-cachen (se
+// Session 34), så en uafspillet video tælles her separat og lægges oveni
+// check-in-badgen, i stedet for at hele DATA-modellen skal vide om videoer.
+let pendingVideoByClient = {};
+
+async function refreshPendingVideoByClient() {
+  if (!sb) return false;
+  const { data, error } = await sb.from('video_messages')
+    .select('client_id, created_at')
+    .eq('hidden_for_coach', false)
+    .eq('from_coach', false)
+    .is('viewed_at', null);
+  if (error) return false;
+  const map = {};
+  (data || []).forEach(v => {
+    const key = String(v.client_id);
+    if (!map[key]) map[key] = { count: 0, latestDate: v.created_at };
+    map[key].count++;
+    if (v.created_at > map[key].latestDate) map[key].latestDate = v.created_at;
+  });
+  const changed = JSON.stringify(map) !== JSON.stringify(pendingVideoByClient);
+  pendingVideoByClient = map;
+  return changed;
+}
+
 async function refreshFromSupabase() {
   if (!sb) return false;
   // VIGTIGT: vent på at alle lokale ændringer, der allerede er i kø til at blive skrevet
@@ -2142,7 +2168,8 @@ if (sb) {
   // den slet ikke — kræver derfor sin egen Realtime-kanal, ligesom booking.
   try {
     sb.channel('video_messages_live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'video_messages' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'video_messages' }, async () => {
+        await refreshPendingVideoByClient();
         rerenderCurrentView();
       })
       .subscribe();
@@ -2908,6 +2935,10 @@ function refreshDashboardNotifications() {
 
 function renderCoachDashboard() {
   refreshDashboardNotifications();
+  // Rune: "de er heller ikke som note på forsiden som coach at der er en
+  // besked?" — kør en baggrundsopdatering af uafspillede videobeskeder pr.
+  // klient, og gentegn kun hvis noget reelt har ændret sig (undgår løkke).
+  refreshPendingVideoByClient().then(changed => { if (changed && currentUser === 'coach') rerenderCurrentView(); });
 
   // Status toggle
   const t = document.getElementById('coach-status-toggle');
@@ -2928,11 +2959,16 @@ function renderCoachDashboard() {
     const weekKeyNow = currentWeekKey();
     list.innerHTML = DATA.clients.map(c => {
       const lastCi = getLastCheckin(c.id);
-      const pending = getPendingCheckins(c.id).length;
+      const pendingVideo = pendingVideoByClient[String(c.id)];
+      const pending = getPendingCheckins(c.id).length + (pendingVideo ? pendingVideo.count : 0);
       const avg = lastCi ? avgScore(lastCi) : null;
       const dotClass = pending > 0 ? 'pending' : (avg != null ? (avg >= 4 ? 'good' : avg >= 3 ? 'warn' : 'none') : 'none');
+      const videoIsNewest = pendingVideo && (!lastCi || pendingVideo.latestDate.slice(0, 10) >= lastCi.date);
       let meta = 'Ingen check-ins endnu';
-      if (lastCi) {
+      if (videoIsNewest) {
+        meta = fmtDate(pendingVideo.latestDate.slice(0, 10)) + ' · 🎥 Ny videobesked'
+          + ` · <span style="color:var(--accent)">${pending} afventer</span>`;
+      } else if (lastCi) {
         const scoreBits = [];
         if (lastCi.energy != null) scoreBits.push('⚡' + lastCi.energy);
         if (lastCi.sleep != null) scoreBits.push('😴' + lastCi.sleep);
@@ -3151,8 +3187,9 @@ function renderMessagesClientList(el) {
   const rows = DATA.clients.map(c => {
     const cis = DATA.checkins.filter(ci => ci.clientId === c.id && !ci.hiddenForCoach).sort((a,b) => b.date.localeCompare(a.date));
     const last = cis[0] || null;
-    const pending = cis.filter(ci => !ci.reply && !ci.autoReplied).length;
-    return { client: c, cis, last, pending };
+    const pendingVideo = pendingVideoByClient[String(c.id)];
+    const pending = cis.filter(ci => !ci.reply && !ci.autoReplied).length + (pendingVideo ? pendingVideo.count : 0);
+    return { client: c, cis, last, pending, pendingVideo };
   });
 
   if (!rows.length) {
@@ -3165,19 +3202,23 @@ function renderMessagesClientList(el) {
     return (b.last ? b.last.date : '').localeCompare(a.last ? a.last.date : '');
   });
 
-  el.innerHTML = rows.map(({ client, last, pending }) => {
+  el.innerHTML = rows.map(({ client, last, pending, pendingVideo }) => {
     const answered = last && last.reply && !last.autoReplied && !last.fromCoach;
     const badge = pending > 0
       ? `<span class="tag" style="background:rgba(240,165,0,0.15);color:var(--warn);flex-shrink:0">${pending} afventer</span>`
       : (answered ? `<span class="tag" style="background:rgba(74,232,122,0.15);color:var(--good);flex-shrink:0">✓ Besvaret</span>` : '');
-    const preview = last
-      ? (last.fromCoach ? `Dig: "${escapeHtml(last.reply || '')}"` : (last.comment ? `"${escapeHtml(last.comment)}"` : (scoreSummaryText(last) || 'Check-in')))
-      : 'Ingen beskeder endnu';
+    const videoIsNewest = pendingVideo && (!last || pendingVideo.latestDate.slice(0, 10) >= last.date);
+    const previewDate = videoIsNewest ? pendingVideo.latestDate.slice(0, 10) : (last ? last.date : null);
+    const preview = videoIsNewest
+      ? '🎥 Ny videobesked'
+      : (last
+        ? (last.fromCoach ? `Dig: "${escapeHtml(last.reply || '')}"` : (last.comment ? `"${escapeHtml(last.comment)}"` : (scoreSummaryText(last) || 'Check-in')))
+        : 'Ingen beskeder endnu');
     return `<div class="client-row" onclick="openMessagesForClient(${client.id})">
       <div class="client-avatar">${escapeHtml(client.name.charAt(0))}</div>
       <div class="client-info">
         <div class="client-name">${escapeHtml(client.name)}</div>
-        <div class="client-meta">${last ? fmtDate(last.date) + ' · ' : ''}${preview}</div>
+        <div class="client-meta">${previewDate ? fmtDate(previewDate) + ' · ' : ''}${preview}</div>
       </div>
       ${badge}
     </div>`;
