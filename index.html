@@ -6386,6 +6386,9 @@ function mergeWeightPointsWithTanita(bodyMetricEntries, tanitaScans) {
   return [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, value]) => ({ date, value }));
 }
 
+// Rune: "vil også gerne have metabolic age ind der et sted" — vises fra og
+// med FØRSTE scanning (svgLineChart tegner et enkelt punkt fint), ikke først
+// når der er to at sammenligne.
 function extractTanitaValueSeries(tanitaScans) {
   const byKey = new Map();
   (tanitaScans || []).forEach(scan => {
@@ -6395,7 +6398,7 @@ function extractTanitaValueSeries(tanitaScans) {
       byKey.get(v.key).points.push({ date: scan.date, value: v.value });
     });
   });
-  return [...byKey.values()].filter(s => s.points.length >= 2);
+  return [...byKey.values()];
 }
 
 // ══════════════════════════════════════
