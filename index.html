@@ -7509,10 +7509,29 @@ function renderTrainingProgressWidget(clientId, isCoachView) {
     }
   }
 
+  // Rune: "Samlet antal træninger af alle slags, styrke, OCR osv skal også
+  // være med i totalt trænings oversigten" — ALT-tids antal pr. type, i
+  // modsætning til km-tallene i "Ugens træning" ovenfor som kun dækker
+  // distance-typer og kun denne uge. Vises altid til begge, samme princip
+  // som "Seneste registrerede træninger" nedenfor.
+  const allLogsForClient = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId);
+  let trainingCountsHtml = '';
+  if (allLogsForClient.length) {
+    const counts = {};
+    allLogsForClient.forEach(t => { counts[t.type] = (counts[t.type] || 0) + 1; });
+    const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([type, count]) =>
+      `<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="font-size:13px">${escapeHtml(type)}</span><strong style="font-size:13px">${count}</strong></div>`
+    ).join('');
+    trainingCountsHtml = `<div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="margin-bottom:8px">Træninger i alt (${allLogsForClient.length})</div>
+      ${rows}
+    </div>`;
+  }
+
   // Seneste registrerede træninger, med mulighed for at slette en fejllogget
   // registrering — vises altid til BÅDE coach og klienten selv, uafhængigt af
   // "vis træningsmål"-togglen (det handler om at rette en fejl, ikke om at se fremgang).
-  const recentLogs = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId).sort((a,b) => b.date.localeCompare(a.date)).slice(0, 5);
+  const recentLogs = allLogsForClient.sort((a,b) => b.date.localeCompare(a.date)).slice(0, 5);
   let recentHtml = '';
   if (recentLogs.length) {
     recentHtml = `<div class="card" style="margin-bottom:16px">
@@ -7539,7 +7558,7 @@ function renderTrainingProgressWidget(clientId, isCoachView) {
     </div>`;
   }
 
-  return goalHtml + recentHtml;
+  return goalHtml + trainingCountsHtml + recentHtml;
 }
 
 function deleteTrainingCheckinLog(id, clientId, isCoachView) {
