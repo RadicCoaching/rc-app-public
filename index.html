@@ -1533,6 +1533,10 @@ let addSlotSelectedClients = new Set();
 let editSlotVisibilityMode = 'alle';
 let editSlotSelectedClients = new Set();
 let slotEditSelection = new Set(); // ID'er på tider valgt til bulk-redigering af synlighed
+// Rune: "Kan reserverede tider, dedikerede tider og optagede tider sættes i
+// system så det ikke bare er en lang liste? ... nemt at overskue og tilgå" —
+// listen deles i tre foldbare grupper. Tom Set = alle grupper foldet ud.
+let collapsedSlotGroups = new Set();
 
 // ══════════════════════════════════════
 // SUPABASE SYNC
@@ -3619,11 +3623,9 @@ async function saveSlotDetails() {
   }
 }
 
-// Grupperer tider til visning: BOOKEDE tider samles øverst — tydeligt markeret med
-// accentfarvet venstrekant og grøn baggrundstone, så de springer i øjnene i forhold til
-// de ledige tider — mens ledige tider ligger samlet nedenunder. Gør det hurtigt at få
-// overblik over hvad der reelt kræver opmærksomhed (booket = nogen kommer), uden at
-// skulle scrolle/scanne en blandet liste igennem.
+// Selve kortet for én tid — grupperingen (Optaget/Dedikeret/Reserveret) sker
+// i slotsToCardsHtml() nedenfor. Bookede tider er tydeligt markeret med
+// accentfarvet venstrekant og grøn baggrundstone.
 function slotToCardHtml(s) {
   const bookedClient = s.bookedByClientId ? DATA.clients.find(c => c.id === s.bookedByClientId) : null;
   const downloaded = isSlotICSDownloaded(s.id);
@@ -3655,19 +3657,35 @@ function slotToCardHtml(s) {
     </div>`;
 }
 
+function toggleSlotGroup(key) {
+  if (collapsedSlotGroups.has(key)) collapsedSlotGroups.delete(key);
+  else collapsedSlotGroups.add(key);
+  renderCoachBookingSlots();
+}
+
+// Tre grupper: Optaget (booket af en klient), Dedikeret (ledig, men
+// reserveret til bestemte udvalgte klienter — de skal selv booke den),
+// Reserveret (ledig og enten åben for alle eller skjult — begge er "en
+// blokeret tid uden en bestemt klient endnu" set fra Rune, blot med
+// forskellig synlighed). Samme gruppering som rc-mobile.
+function slotGroupHtml(key, label, color, items) {
+  if (!items.length) return '';
+  const collapsed = collapsedSlotGroups.has(key);
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin:16px 0 8px;user-select:none" onclick="toggleSlotGroup('${key}')">
+    <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.08em">${label} (${items.length})</div>
+    <div style="color:var(--gray);font-size:13px">${collapsed ? '▸' : '▾'}</div>
+  </div>`;
+  if (!collapsed) html += items.map(slotToCardHtml).join('');
+  return html;
+}
+
 function slotsToCardsHtml(slots) {
   const booked = slots.filter(s => s.status === 'booket');
-  const open = slots.filter(s => s.status !== 'booket');
-  let html = '';
-  if (booked.length) {
-    html += `<div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px">✅ Bookede tider (${booked.length})</div>`;
-    html += booked.map(slotToCardHtml).join('');
-  }
-  if (open.length) {
-    html += `<div style="font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin:${booked.length ? '20px' : '4px'} 0 8px">🟢 Ledige tider (${open.length})</div>`;
-    html += open.map(slotToCardHtml).join('');
-  }
-  return html;
+  const dedicated = slots.filter(s => s.status !== 'booket' && s.visibility === 'udvalgte');
+  const reserved = slots.filter(s => s.status !== 'booket' && s.visibility !== 'udvalgte');
+  return slotGroupHtml('booket', '🟢 Optaget', 'var(--accent)', booked)
+    + slotGroupHtml('dedikeret', '🎯 Dedikeret', 'var(--gray)', dedicated)
+    + slotGroupHtml('reserveret', '🕒 Reserveret', 'var(--gray)', reserved);
 }
 
 function renderCoachBookingSlots() {
