@@ -1042,6 +1042,23 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   </div>
 </div>
 
+<!-- Coach: book en ledig tid direkte til en klient, uden omvejen om Kalender-appen
+     (Rune: "vil det sige at jeg ikke selv kan booke for en oprettet klient i appen
+     så denne bliver grøn?") -->
+<div class="modal-overlay" id="modal-book-slot-to-client">
+  <div class="modal">
+    <div class="modal-title">Book til klient</div>
+    <div class="field">
+      <label>Vælg klient</label>
+      <div id="book-slot-clients-list" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:0 12px"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-book-slot-to-client')">Annullér</button>
+      <button class="btn btn-primary" onclick="saveBookSlotToClient()">Book</button>
+    </div>
+  </div>
+</div>
+
 <!-- Client: Exercise Detail -->
 <div class="modal-overlay" id="modal-exercise-detail">
   <div class="modal">
@@ -3818,6 +3835,53 @@ async function saveSlotDetails() {
   }
 }
 
+let bookSlotToClientId = null;
+let bookSlotSelectedClient = null;
+
+function openBookSlotToClient(slotId) {
+  bookSlotToClientId = slotId;
+  bookSlotSelectedClient = null;
+  renderBookSlotClientsList();
+  document.getElementById('modal-book-slot-to-client').classList.add('open');
+}
+
+function renderBookSlotClientsList() {
+  const el = document.getElementById('book-slot-clients-list');
+  if (!el) return;
+  if (!DATA.clients.length) { el.innerHTML = '<div class="card-sub" style="padding:10px 0">Ingen klienter oprettet endnu.</div>'; return; }
+  el.innerHTML = DATA.clients.map(c => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="selectBookSlotClient(${c.id})">
+      <span class="toggle-label"><strong>${escapeHtml(c.name)}</strong></span>
+      <button type="button" class="toggle ${bookSlotSelectedClient === c.id ? 'on' : ''}"></button>
+    </div>`).join('');
+}
+
+function selectBookSlotClient(clientId) {
+  bookSlotSelectedClient = clientId;
+  renderBookSlotClientsList();
+}
+
+async function saveBookSlotToClient() {
+  if (!bookSlotSelectedClient) { showToast('Vælg en klient'); return; }
+  const s = (DATA.bookingSlots || []).find(x => x.id === bookSlotToClientId);
+  if (!s) return;
+  s.status = 'booket';
+  s.bookedByClientId = bookSlotSelectedClient;
+  s.bookedAt = new Date().toISOString();
+  s.customName = null;
+  save();
+  closeModal('modal-book-slot-to-client');
+  renderCoachBookingSlots();
+  if (sb) {
+    try {
+      const { error } = await sb.from('booking_slots').update({
+        status: 'booket', booked_by_client_id: s.bookedByClientId, booked_at: s.bookedAt, custom_name: null
+      }).eq('id', s.id);
+      if (error) { console.error('Kunne ikke booke tiden i Supabase', error); showToast('⚠ Booking fejlede i skyen: ' + (error.message || 'ukendt fejl')); }
+    } catch (err) { console.error('Kunne ikke booke tiden i Supabase', err); showToast('⚠ Booking fejlede — prøv igen'); }
+  }
+}
+
 // Selve kortet for én tid — grupperingen (Optaget/Dedikeret/Reserveret) sker
 // i slotsToCardsHtml() nedenfor. Bookede tider er tydeligt markeret med
 // accentfarvet venstrekant og grøn baggrundstone.
@@ -3825,17 +3889,23 @@ function slotToCardHtml(s) {
   const bookedClient = s.bookedByClientId ? DATA.clients.find(c => c.id === s.bookedByClientId) : null;
   const downloaded = isSlotICSDownloaded(s.id);
   const isBooked = s.status === 'booket';
+  // Navngivet, men IKKE en rigtig klient — hører hjemme i Optaget-gruppen,
+  // men skal se anderledes ud end en ægte klient-booking (samme regel som
+  // rc-mobile), så Rune aldrig forveksler de to ved et hurtigt blik.
+  const isNamedNonClient = !isBooked && !!s.customName;
   const cardStyle = isBooked
     ? 'margin-bottom:8px;border-left:3px solid var(--accent);background:var(--accent-dim)'
-    : 'margin-bottom:8px';
+    : isNamedNonClient
+      ? 'margin-bottom:8px;border-left:3px solid var(--warn);background:rgba(240,165,0,0.08)'
+      : 'margin-bottom:8px';
   return `<div class="card" style="${cardStyle}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="display:flex;gap:10px;min-width:0">
           <input type="checkbox" autocomplete="off" data-slot-checkbox="${s.id}" style="width:18px;height:18px;margin-top:3px;accent-color:var(--accent);flex-shrink:0" ${slotEditSelection.has(s.id) ? 'checked' : ''} onchange="toggleSlotSelection(${s.id})">
           <div style="min-width:0">
             <div style="font-weight:700">${fmtDate(s.date)} · ${s.time} <span style="color:var(--gray);font-weight:400">(${s.durationMin || 60} min)</span>${downloaded ? ' <span style="color:var(--accent);font-weight:600;font-size:12px">✓ Hentet</span>' : ''}</div>
-            ${s.customName ? `<div class="card-sub" style="margin-top:2px;color:var(--accent);font-weight:700">${escapeHtml(s.customName)}</div>` : ''}
-            <div class="card-sub" style="margin-top:2px;${isBooked ? 'color:var(--accent);font-weight:700' : ''}">${isBooked ? '✅ BOOKET — ' + escapeHtml(bookedClient ? bookedClient.name : '(ukendt)') : '🟢 Ledig — ' + slotVisibilityLabel(s)}</div>
+            ${s.customName ? `<div class="card-sub" style="margin-top:2px;color:${isNamedNonClient ? 'var(--warn)' : 'var(--accent)'};font-weight:700">${escapeHtml(s.customName)}</div>` : ''}
+            <div class="card-sub" style="margin-top:2px;${isBooked ? 'color:var(--accent);font-weight:700' : ''}">${isBooked ? '✅ BOOKET — ' + escapeHtml(bookedClient ? bookedClient.name : '(ukendt)') : isNamedNonClient ? '🙈 Ikke en oprettet klient — vises ikke for nogen, kan ikke bookes' : '🟢 Ledig — ' + slotVisibilityLabel(s)}</div>
             ${s.location ? `<div class="card-sub" style="margin-top:2px">📍 ${escapeHtml(s.location)}</div>` : ''}
             ${s.note ? `<div class="card-sub" style="margin-top:2px">${escapeHtml(s.note)}</div>` : ''}
           </div>
@@ -3846,6 +3916,7 @@ function slotToCardHtml(s) {
                <button class="btn-icon" title="Download .ics" onclick="downloadSlotICS(${s.id})">📥</button>
                <button class="btn btn-sm btn-danger" onclick="coachCancelSlot(${s.id})">Frigiv</button>`
             : `<button class="btn-icon" title="Rediger tid" onclick="openEditSlotDetails(${s.id})">✎</button>
+               <button class="btn-icon" title="Book til klient" onclick="openBookSlotToClient(${s.id})">👤</button>
                <button class="btn-icon" title="Rediger synlighed" onclick="editSingleSlotVisibility(${s.id})">👁</button>
                <button class="btn-icon" title="Slet" onclick="deleteSlot(${s.id})">✕</button>`}
         </div>
@@ -3963,10 +4034,17 @@ function slotGroupHtml(key, label, color, items) {
   return html;
 }
 
+// Rune: "Alt oprettet i kalender med navn må IKKE være reserveret til i
+// appen... Samtidig vil jeg ha at alle bookede tider (grøn farve eller ej)
+// er øverst, samlet under en fane." — en tid med customName (skrevet
+// direkte, eller autoudfyldt fra en omdøbt kalenderbegivenhed på mobilen,
+// som web-appen deler database med) er IKKE en anonym ledig tid nogen kan
+// tilbydes/booke, og hører derfor hjemme i Optaget, blot med et andet
+// visuelt udtryk (se slotToCardHtml) end en rigtig klient-booking.
 function slotsToCardsHtml(slots) {
-  const booked = slots.filter(s => s.status === 'booket');
-  const dedicated = slots.filter(s => s.status !== 'booket' && s.visibility === 'udvalgte');
-  const reserved = slots.filter(s => s.status !== 'booket' && s.visibility !== 'udvalgte');
+  const booked = slots.filter(s => s.status === 'booket' || !!s.customName);
+  const dedicated = slots.filter(s => s.status !== 'booket' && !s.customName && s.visibility === 'udvalgte');
+  const reserved = slots.filter(s => s.status !== 'booket' && !s.customName && s.visibility !== 'udvalgte');
   return slotGroupHtml('booket', '🟢 Optaget', 'var(--accent)', booked)
     + slotGroupHtml('dedikeret', '🎯 Dedikeret', 'var(--gray)', dedicated)
     + slotGroupHtml('reserveret', '🕒 Reserveret', 'var(--gray)', reserved);
