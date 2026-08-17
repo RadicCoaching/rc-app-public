@@ -968,6 +968,35 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   </div>
 </div>
 
+<!-- Coach: indsæt en hel tekst-liste (fx fra Noter) og opret flere ledige tider på én gang -->
+<div class="modal-overlay" id="modal-bulk-add-slots">
+  <div class="modal">
+    <div class="modal-title">Indsæt liste med tider</div>
+    <div class="field"><label>Indsæt liste (én tid pr. linje, fx "23/8 kl 18.30")</label>
+      <textarea id="bulk-slots-text" oninput="renderBulkSlotsPreview()" placeholder="Reserverede tider&#10;23/8 kl 18.30&#10;25/8 kl 11.00" style="min-height:140px"></textarea>
+    </div>
+    <div id="bulk-slots-preview" class="card-sub" style="margin:-8px 0 12px"></div>
+    <div class="field"><label>Varighed (minutter, gælder alle)</label><input type="number" id="bulk-slots-duration" value="60" step="15" min="15"></div>
+    <div class="field"><label>Hvem kan se dem?</label>
+      <div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <button type="button" class="client-tab" id="bulk-vis-btn-skjult" onclick="setSlotVisibilityMode('bulk','skjult')">Skjult</button>
+        <button type="button" class="client-tab" id="bulk-vis-btn-udvalgte" onclick="setSlotVisibilityMode('bulk','udvalgte')">Udvalgte</button>
+        <button type="button" class="client-tab" id="bulk-vis-btn-alle" onclick="setSlotVisibilityMode('bulk','alle')">Alle</button>
+      </div>
+    </div>
+    <div class="card-sub" id="bulk-vis-hint" style="margin:-8px 0 12px"></div>
+    <div class="field" id="bulk-vis-clients-field" style="display:none">
+      <label>Vælg klienter</label>
+      <div id="bulk-vis-clients-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:0 12px"></div>
+    </div>
+    <div class="field"><label>Lokation (valgfrit, gælder alle)</label><input type="text" id="bulk-slots-location" placeholder="Fx Lemvig Motionscenter, Transportvej 21, 7620 Lemvig"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-bulk-add-slots')">Annullér</button>
+      <button class="btn btn-primary" id="bulk-slots-submit" onclick="saveBulkSlots()">Opret tider</button>
+    </div>
+  </div>
+</div>
+
 <!-- Coach: Rediger synlighed for én eller flere allerede oprettede tider -->
 <div class="modal-overlay" id="modal-edit-slot-visibility">
   <div class="modal">
@@ -1532,6 +1561,11 @@ let addSlotVisibilityMode = 'alle'; // 'skjult' | 'udvalgte' | 'alle'
 let addSlotSelectedClients = new Set();
 let editSlotVisibilityMode = 'alle';
 let editSlotSelectedClients = new Set();
+// Rune: "laver tit i noter hvor jeg krydstjekker kalendre og skriver ind
+// ... kan sådan en liste her ... køres direkte ind når listen er lavet som
+// en samlet bunke?" — bruges af "Indsæt liste"-modalen (prefix 'bulk').
+let bulkSlotVisibilityMode = 'alle';
+let bulkSlotSelectedClients = new Set();
 let slotEditSelection = new Set(); // ID'er på tider valgt til bulk-redigering af synlighed
 // Rune: "Kan reserverede tider, dedikerede tider og optagede tider sættes i
 // system så det ikke bare er en lang liste? ... nemt at overskue og tilgå" —
@@ -3416,13 +3450,15 @@ function deleteAppointment(id) {
 // (prefix 'edit'). Al state ligger i addSlot*/editSlot*-variablerne foroven i filen.
 // ══════════════════════════════════════
 function slotVisState(prefix) {
-  return prefix === 'add'
-    ? { mode: addSlotVisibilityMode, set: addSlotSelectedClients }
-    : { mode: editSlotVisibilityMode, set: editSlotSelectedClients };
+  if (prefix === 'add') return { mode: addSlotVisibilityMode, set: addSlotSelectedClients };
+  if (prefix === 'bulk') return { mode: bulkSlotVisibilityMode, set: bulkSlotSelectedClients };
+  return { mode: editSlotVisibilityMode, set: editSlotSelectedClients };
 }
 
 function setSlotVisibilityMode(prefix, mode) {
-  if (prefix === 'add') addSlotVisibilityMode = mode; else editSlotVisibilityMode = mode;
+  if (prefix === 'add') addSlotVisibilityMode = mode;
+  else if (prefix === 'bulk') bulkSlotVisibilityMode = mode;
+  else editSlotVisibilityMode = mode;
   renderSlotVisibilityUI(prefix);
 }
 
@@ -3516,6 +3552,122 @@ async function saveNewSlot() {
       save();
       renderCoachBookingSlots();
       showToast('⚠ Kunne ikke gemme tiden i skyen — prøv igen');
+    }
+  }
+}
+
+// Rune: "laver tit i noter hvor jeg krydstjekker kalendre og skriver ind
+// ... kan sådan en liste her ... køres direkte ind når listen er lavet som
+// en samlet bunke?" — genkender "DD/M[/ÅÅÅÅ] ... TT.MM" eller "TT:MM" et
+// sted i hver linje. Overskrifter/tomme linjer matcher slet ikke og
+// springes bare stille over. Samme regel som rc-mobiles parseBulkSlots.ts.
+function parseBulkSlotList(text) {
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+  const currentYear = now.getFullYear();
+  const pattern = /(\d{1,2})[/\-.](\d{1,2})(?:[/\-.](\d{2,4}))?\D+?(\d{1,2})[.:](\d{2})/;
+  const results = [];
+  text.split('\n').forEach(rawLine => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const m = line.match(pattern);
+    if (!m) return;
+    const day = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    if (day < 1 || day > 31 || month < 1 || month > 12) return;
+    const hour = parseInt(m[4], 10);
+    const minute = m[5];
+    if (hour > 23 || parseInt(minute, 10) > 59) return;
+    let year = m[3] ? parseInt(m[3].length === 2 ? '20' + m[3] : m[3], 10) : currentYear;
+    let dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    // Intet år angivet, og datoen ligger allerede bagud i år -> antag næste år.
+    if (!m[3] && dateStr < todayStr) {
+      year += 1;
+      dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    results.push({ date: dateStr, time: `${String(hour).padStart(2, '0')}:${minute}`, raw: line });
+  });
+  return results;
+}
+
+function toDkDateStr(dateStr) {
+  const [y, m, d] = dateStr.split('-');
+  return `${d}/${m}-${y}`;
+}
+
+function renderBulkSlotsPreview() {
+  const textEl = document.getElementById('bulk-slots-text');
+  const text = textEl ? textEl.value : '';
+  const parsed = parseBulkSlotList(text);
+  const nonEmptyLines = text.split('\n').filter(l => l.trim() !== '').length;
+  const el = document.getElementById('bulk-slots-preview');
+  const submitBtn = document.getElementById('bulk-slots-submit');
+  if (!nonEmptyLines) {
+    if (el) el.innerHTML = '';
+    if (submitBtn) submitBtn.textContent = 'Opret tider';
+    return;
+  }
+  const skipped = nonEmptyLines - parsed.length;
+  let html = `<div>${parsed.length} tid${parsed.length === 1 ? '' : 'er'} genkendt${skipped > 0 ? ` (${skipped} linje${skipped === 1 ? '' : 'r'} sprunget over, fx overskrifter)` : ''}</div>`;
+  html += parsed.map(p => `<div style="margin-top:2px">${toDkDateStr(p.date)} · ${p.time}</div>`).join('');
+  if (el) el.innerHTML = html;
+  if (submitBtn) submitBtn.textContent = parsed.length ? `Opret ${parsed.length} tider` : 'Opret tider';
+}
+
+function showBulkAddSlotsModal() {
+  bulkSlotVisibilityMode = 'alle';
+  bulkSlotSelectedClients = new Set();
+  renderSlotVisibilityUI('bulk');
+  document.getElementById('bulk-slots-text').value = '';
+  document.getElementById('bulk-slots-duration').value = 60;
+  document.getElementById('bulk-slots-location').value = '';
+  renderBulkSlotsPreview();
+  document.getElementById('modal-bulk-add-slots').classList.add('open');
+}
+
+async function saveBulkSlots() {
+  const text = document.getElementById('bulk-slots-text').value;
+  const parsed = parseBulkSlotList(text);
+  if (!parsed.length) { showToast('Ingen tider genkendt i teksten'); return; }
+  if (bulkSlotVisibilityMode === 'udvalgte' && !bulkSlotSelectedClients.size) { showToast('Vælg mindst én klient, eller skift til Skjult/Alle'); return; }
+  const durationMin = parseInt(document.getElementById('bulk-slots-duration').value, 10) || 60;
+  const location = document.getElementById('bulk-slots-location').value.trim();
+  const visibility = bulkSlotVisibilityMode;
+  const targetClientIds = visibility === 'udvalgte' ? [...bulkSlotSelectedClients] : [];
+  const newSlots = parsed.map(p => ({
+    id: genId(), date: p.date, time: p.time, durationMin,
+    visibility, targetClientIds,
+    status: 'ledig', bookedByClientId: null, bookedAt: null, coachSeen: true, note: null, location: location || null,
+  }));
+  if (!DATA.bookingSlots) DATA.bookingSlots = [];
+  DATA.bookingSlots.push(...newSlots);
+  save();
+  closeModal('modal-bulk-add-slots');
+  renderCoachBookingSlots();
+  if (sb) {
+    try {
+      const { error } = await sb.from('booking_slots').insert(newSlots.map(s => ({
+        id: s.id, date: s.date, time: s.time, duration_min: s.durationMin,
+        visibility: s.visibility, target_client_ids: s.targetClientIds, status: 'ledig', booked_by_client_id: null,
+        booked_at: null, coach_seen: true, note: null, location: s.location,
+      })));
+      if (error) {
+        console.error('Kunne ikke oprette tider i Supabase', error);
+        const ids = new Set(newSlots.map(s => s.id));
+        DATA.bookingSlots = DATA.bookingSlots.filter(s => !ids.has(s.id));
+        save();
+        renderCoachBookingSlots();
+        showToast('⚠ Kunne ikke gemme tiderne i skyen: ' + (error.message || 'ukendt fejl'));
+      } else {
+        showToast(`${newSlots.length} tider oprettet`);
+      }
+    } catch (err) {
+      console.error('Kunne ikke oprette tider i Supabase', err);
+      const ids = new Set(newSlots.map(s => s.id));
+      DATA.bookingSlots = DATA.bookingSlots.filter(s => !ids.has(s.id));
+      save();
+      renderCoachBookingSlots();
+      showToast('⚠ Kunne ikke gemme tiderne i skyen — prøv igen');
     }
   }
 }
@@ -3697,7 +3849,10 @@ function renderCoachBookingSlots() {
   const stillHere = new Set(slots.map(s => s.id));
   [...slotEditSelection].forEach(id => { if (!stillHere.has(id)) slotEditSelection.delete(id); });
 
-  let html = `<button class="btn btn-primary btn-block" style="margin-bottom:16px" onclick="showAddSlotModal()">+ Ny ledig tid</button>`;
+  let html = `<div style="display:flex;gap:8px;margin-bottom:16px">
+    <button class="btn btn-primary" style="flex:1" onclick="showAddSlotModal()">+ Ny ledig tid</button>
+    <button class="btn" onclick="showBulkAddSlotsModal()">📋 Indsæt liste</button>
+  </div>`;
   const hasBooked = slots.some(s => s.status === 'booket');
   if (hasBooked) {
     html += `<button class="btn btn-block" style="margin-bottom:16px" onclick="downloadAllBookingsICS()">📥 Download alle bookinger (.ics)</button>`;
