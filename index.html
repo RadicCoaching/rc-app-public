@@ -3877,6 +3877,17 @@ function dayHeaderLabel(dateStr) {
   return `${WEEKDAYS_DK[date.getDay()]} ${d}/${m}`;
 }
 
+const MONTHS_DK = ['Januar', 'Februar', 'Marts', 'April', 'Maj', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'December'];
+
+function monthKey(dateStr) {
+  return dateStr.slice(0, 7); // "ÅÅÅÅ-MM"
+}
+
+function monthHeaderLabel(dateStr) {
+  const [y, m] = dateStr.split('-').map(Number);
+  return `${MONTHS_DK[m - 1]} ${y}`;
+}
+
 // Tilstedeværelse i dette Set betyder "vend standard-tilstanden om" for den
 // uge — default er at kun NÆRMESTE uge i hver gruppe er foldet ud, resten
 // starter foldet sammen (samme model som rc-mobile).
@@ -3909,9 +3920,15 @@ function slotGroupHtml(key, label, color, items) {
 
   let lastDate = '';
   let lastWeekKey = '';
+  let lastMonth = '';
   let weekIndex = -1;
   let currentWeekCollapsed = false;
   items.forEach(s => {
+    const month = monthKey(s.date);
+    if (month !== lastMonth) {
+      lastMonth = month;
+      html += `<div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">${monthHeaderLabel(s.date)}</div>`;
+    }
     const weekStart = mondayOfWeek(s.date);
     const weekKey = `${key}-${weekStart}`;
     if (weekKey !== lastWeekKey) {
