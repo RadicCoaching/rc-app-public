@@ -3595,6 +3595,39 @@ function toDkDateStr(dateStr) {
   return `${d}/${m}-${y}`;
 }
 
+// Modstykket til parseBulkSlotList — "trække reserverede tider ud, til en
+// note igen, til hvis jeg skal sende til klienter uden for appen" (Rune).
+// Samme format hun selv skriver i.
+function formatBulkSlotList(slots) {
+  const lines = slots.map(s => {
+    const [, m, d] = s.date.split('-');
+    const time = (s.time || '').replace(':', '.');
+    return `${parseInt(d, 10)}/${parseInt(m, 10)} kl ${time}`;
+  });
+  return ['Reserverede tider', ...lines].join('\n');
+}
+
+async function shareReservedSlotsAsText() {
+  const now = new Date().toISOString().split('T')[0];
+  const reserved = (DATA.bookingSlots || [])
+    .filter(s => s.status !== 'booket' && s.visibility !== 'udvalgte' && s.date >= now)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  if (!reserved.length) return;
+  const text = formatBulkSlotList(reserved);
+  if (navigator.share) {
+    try { await navigator.share({ text }); } catch (err) { /* brugeren annullerede delingen — ikke en fejl */ }
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Kopieret til udklipsholder');
+    } catch (err) {
+      showToast('Kunne ikke kopiere — prøv at markere teksten manuelt');
+    }
+  } else {
+    showToast('Deling understøttes ikke i denne browser');
+  }
+}
+
 function renderBulkSlotsPreview() {
   const textEl = document.getElementById('bulk-slots-text');
   const text = textEl ? textEl.value : '';
@@ -3823,9 +3856,14 @@ function toggleSlotGroup(key) {
 function slotGroupHtml(key, label, color, items) {
   if (!items.length) return '';
   const collapsed = collapsedSlotGroups.has(key);
+  // "Del"-knappen findes kun på Reserveret-gruppen (Rune bad specifikt om at
+  // kunne trække reserverede tider ud til en note, til klienter uden for appen).
+  const shareBtn = key === 'reserveret'
+    ? `<button type="button" class="btn-icon" title="Del som tekst" style="margin-right:10px" onclick="event.stopPropagation();shareReservedSlotsAsText()">📤</button>`
+    : '';
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin:16px 0 8px;user-select:none" onclick="toggleSlotGroup('${key}')">
     <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.08em">${label} (${items.length})</div>
-    <div style="color:var(--gray);font-size:13px">${collapsed ? '▸' : '▾'}</div>
+    <div style="display:flex;align-items:center">${shareBtn}<span style="color:var(--gray);font-size:13px">${collapsed ? '▸' : '▾'}</span></div>
   </div>`;
   if (!collapsed) html += items.map(slotToCardHtml).join('');
   return html;
