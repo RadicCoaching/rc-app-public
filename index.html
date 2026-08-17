@@ -3848,6 +3848,46 @@ function toggleSlotGroup(key) {
   renderCoachBookingSlots();
 }
 
+// Rune: "I reserverede er der jo MANGE tider og det er svært at have
+// overblik ... kan tiderne der er samme dag, grupperes, eller samme uge?"
+// — mandag i ugen som stabil grupperingsnøgle (ikke bare ugenummer, som kan
+// gentage sig på tværs af årsskifter). Samme funktioner som rc-mobile.
+const WEEKDAYS_DK = ['Søndag', 'Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag'];
+
+function mondayOfWeek(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const isoDay = date.getDay() || 7;
+  date.setDate(date.getDate() - (isoDay - 1));
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function isoWeekNumber(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+function dayHeaderLabel(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return `${WEEKDAYS_DK[date.getDay()]} ${d}/${m}`;
+}
+
+// Tilstedeværelse i dette Set betyder "vend standard-tilstanden om" for den
+// uge — default er at kun NÆRMESTE uge i hver gruppe er foldet ud, resten
+// starter foldet sammen (samme model som rc-mobile).
+let toggledSlotWeeks = new Set();
+
+function toggleSlotWeek(weekKey) {
+  if (toggledSlotWeeks.has(weekKey)) toggledSlotWeeks.delete(weekKey);
+  else toggledSlotWeeks.add(weekKey);
+  renderCoachBookingSlots();
+}
+
 // Tre grupper: Optaget (booket af en klient), Dedikeret (ledig, men
 // reserveret til bestemte udvalgte klienter — de skal selv booke den),
 // Reserveret (ledig og enten åben for alle eller skjult — begge er "en
@@ -3865,7 +3905,33 @@ function slotGroupHtml(key, label, color, items) {
     <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.08em">${label} (${items.length})</div>
     <div style="display:flex;align-items:center">${shareBtn}<span style="color:var(--gray);font-size:13px">${collapsed ? '▸' : '▾'}</span></div>
   </div>`;
-  if (!collapsed) html += items.map(slotToCardHtml).join('');
+  if (collapsed) return html;
+
+  let lastDate = '';
+  let lastWeekKey = '';
+  let weekIndex = -1;
+  let currentWeekCollapsed = false;
+  items.forEach(s => {
+    const weekStart = mondayOfWeek(s.date);
+    const weekKey = `${key}-${weekStart}`;
+    if (weekKey !== lastWeekKey) {
+      lastWeekKey = weekKey;
+      weekIndex++;
+      const defaultCollapsed = weekIndex > 0; // kun nærmeste uge er udfoldet som udgangspunkt
+      currentWeekCollapsed = toggledSlotWeeks.has(weekKey) ? !defaultCollapsed : defaultCollapsed;
+      const weekCount = items.filter(x => mondayOfWeek(x.date) === weekStart).length;
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;background:var(--card);border-radius:8px;padding:8px 12px;margin:10px 0 4px" onclick="toggleSlotWeek('${weekKey}')">
+        <span style="font-size:12px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.04em">Uge ${isoWeekNumber(s.date)} (${weekCount})</span>
+        <span style="color:var(--gray);font-size:12px">${currentWeekCollapsed ? '▸' : '▾'}</span>
+      </div>`;
+    }
+    if (currentWeekCollapsed) return;
+    if (s.date !== lastDate) {
+      lastDate = s.date;
+      html += `<div style="font-size:13px;font-weight:700;margin:10px 0 4px 2px">${dayHeaderLabel(s.date)}</div>`;
+    }
+    html += slotToCardHtml(s);
+  });
   return html;
 }
 
