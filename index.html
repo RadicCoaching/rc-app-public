@@ -960,6 +960,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       <div id="add-vis-clients-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:0 12px"></div>
     </div>
     <div class="field"><label>Lokation (valgfrit — kommer med i kalender-filen)</label><input type="text" id="slot-location" placeholder="Fx Lemvig Motionscenter, Transportvej 21, 7620 Lemvig"></div>
+    <div class="field"><label>Navn på aftalen (valgfrit, behøver ikke være en klient)</label><input type="text" id="slot-custom-name" placeholder="Fx 'Tandlæge' eller en persons navn"></div>
     <div class="field"><label>Note (valgfrit)</label><textarea id="slot-note" placeholder="Fx 'Individuel PT-session'" style="min-height:70px"></textarea></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-add-slot')">Annullér</button>
@@ -1032,6 +1033,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     <div class="field"><label>Tidspunkt</label><input type="time" id="edit-slot-time"></div>
     <div class="field"><label>Varighed (min)</label><input type="number" id="edit-slot-duration" value="60"></div>
     <div class="field"><label>Sted</label><input type="text" id="edit-slot-location" placeholder="fx Lemvig Motionscenter"></div>
+    <div class="field"><label>Navn på aftalen (valgfrit, behøver ikke være en klient)</label><input type="text" id="edit-slot-custom-name" placeholder="Fx 'Tandlæge' eller en persons navn"></div>
     <div class="field"><label>Note</label><input type="text" id="edit-slot-note" placeholder="valgfri"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-edit-slot-details')">Annullér</button>
@@ -2156,7 +2158,8 @@ async function refreshFromSupabase() {
         targetClientIds: s.target_client_ids || (s.target_client_id ? [s.target_client_id] : []),
         status: s.status || 'ledig',
         bookedByClientId: s.booked_by_client_id || null, bookedAt: s.booked_at || null,
-        coachSeen: s.coach_seen !== undefined ? !!s.coach_seen : true, note: s.note || '', location: s.location || ''
+        coachSeen: s.coach_seen !== undefined ? !!s.coach_seen : true, note: s.note || '', location: s.location || '',
+        customName: s.custom_name || null
       })),
     };
     ['Gåtur', 'Cykling', 'Spinning'].forEach(t => { if (!DATA.trainingTypes.includes(t)) DATA.trainingTypes.push(t); });
@@ -3505,6 +3508,7 @@ function showAddSlotModal() {
   document.getElementById('slot-time').value = '';
   document.getElementById('slot-duration').value = 60;
   document.getElementById('slot-location').value = localStorage.getItem('rc_last_slot_location') || 'Lemvig Motionscenter, Transportvej 21, 7620 Lemvig';
+  document.getElementById('slot-custom-name').value = '';
   document.getElementById('slot-note').value = '';
   document.getElementById('modal-add-slot').classList.add('open');
 }
@@ -3514,6 +3518,7 @@ async function saveNewSlot() {
   const time = document.getElementById('slot-time').value;
   const durationMin = parseInt(document.getElementById('slot-duration').value, 10) || 60;
   const location = document.getElementById('slot-location').value.trim();
+  const customName = document.getElementById('slot-custom-name').value.trim();
   const note = document.getElementById('slot-note').value.trim();
   if (!date || !time) { showToast('Angiv dato og tidspunkt'); return; }
   if (addSlotVisibilityMode === 'udvalgte' && !addSlotSelectedClients.size) { showToast('Vælg mindst én klient, eller skift til Skjult/Alle'); return; }
@@ -3522,7 +3527,8 @@ async function saveNewSlot() {
     id: genId(), date, time, durationMin,
     visibility: addSlotVisibilityMode,
     targetClientIds: addSlotVisibilityMode === 'udvalgte' ? [...addSlotSelectedClients] : [],
-    status: 'ledig', bookedByClientId: null, bookedAt: null, coachSeen: true, note, location
+    status: 'ledig', bookedByClientId: null, bookedAt: null, coachSeen: true, note, location,
+    customName: customName || null
   };
   if (!DATA.bookingSlots) DATA.bookingSlots = [];
   DATA.bookingSlots.push(slot);
@@ -3534,7 +3540,8 @@ async function saveNewSlot() {
       const { error } = await sb.from('booking_slots').insert({
         id: slot.id, date: slot.date, time: slot.time, duration_min: slot.durationMin,
         visibility: slot.visibility, target_client_ids: slot.targetClientIds, status: 'ledig', booked_by_client_id: null,
-        booked_at: null, coach_seen: true, note: slot.note || null, location: slot.location || null
+        booked_at: null, coach_seen: true, note: slot.note || null, location: slot.location || null,
+        custom_name: slot.customName
       });
       if (error) {
         console.error('Kunne ikke oprette tid i Supabase', error);
@@ -3780,6 +3787,7 @@ function openEditSlotDetails(slotId) {
   document.getElementById('edit-slot-time').value = s.time || '';
   document.getElementById('edit-slot-duration').value = s.durationMin || 60;
   document.getElementById('edit-slot-location').value = s.location || '';
+  document.getElementById('edit-slot-custom-name').value = s.customName || '';
   document.getElementById('edit-slot-note').value = s.note || '';
   document.getElementById('modal-edit-slot-details').classList.add('open');
 }
@@ -3794,6 +3802,7 @@ async function saveSlotDetails() {
   s.time = time;
   s.durationMin = parseInt(document.getElementById('edit-slot-duration').value, 10) || 60;
   s.location = document.getElementById('edit-slot-location').value.trim() || null;
+  s.customName = document.getElementById('edit-slot-custom-name').value.trim() || null;
   s.note = document.getElementById('edit-slot-note').value.trim() || null;
   save();
   closeModal('modal-edit-slot-details');
@@ -3801,7 +3810,8 @@ async function saveSlotDetails() {
   if (sb) {
     try {
       const { error } = await sb.from('booking_slots').update({
-        date: s.date, time: s.time, duration_min: s.durationMin, location: s.location, note: s.note
+        date: s.date, time: s.time, duration_min: s.durationMin, location: s.location, note: s.note,
+        custom_name: s.customName
       }).eq('id', s.id);
       if (error) { console.error('Kunne ikke gemme tid i Supabase', error); showToast('⚠ Gemning fejlede i skyen: ' + (error.message || 'ukendt fejl')); }
     } catch (err) { console.error('Kunne ikke gemme tid i Supabase', err); showToast('⚠ Gemning fejlede — prøv igen'); }
@@ -3824,6 +3834,7 @@ function slotToCardHtml(s) {
           <input type="checkbox" autocomplete="off" data-slot-checkbox="${s.id}" style="width:18px;height:18px;margin-top:3px;accent-color:var(--accent);flex-shrink:0" ${slotEditSelection.has(s.id) ? 'checked' : ''} onchange="toggleSlotSelection(${s.id})">
           <div style="min-width:0">
             <div style="font-weight:700">${fmtDate(s.date)} · ${s.time} <span style="color:var(--gray);font-weight:400">(${s.durationMin || 60} min)</span>${downloaded ? ' <span style="color:var(--accent);font-weight:600;font-size:12px">✓ Hentet</span>' : ''}</div>
+            ${s.customName ? `<div class="card-sub" style="margin-top:2px;color:var(--accent);font-weight:700">${escapeHtml(s.customName)}</div>` : ''}
             <div class="card-sub" style="margin-top:2px;${isBooked ? 'color:var(--accent);font-weight:700' : ''}">${isBooked ? '✅ BOOKET — ' + escapeHtml(bookedClient ? bookedClient.name : '(ukendt)') : '🟢 Ledig — ' + slotVisibilityLabel(s)}</div>
             ${s.location ? `<div class="card-sub" style="margin-top:2px">📍 ${escapeHtml(s.location)}</div>` : ''}
             ${s.note ? `<div class="card-sub" style="margin-top:2px">${escapeHtml(s.note)}</div>` : ''}
@@ -4237,9 +4248,13 @@ function slotToICSEvent(slot, client) {
   const uid = 'rc-' + slot.id + '@radichcoaching.dk';
   // Booket tid: viser klientens navn. Endnu-ledig tid (reserveret af coachen selv, fx til
   // familiekalenderen): holdes bevidst uden klientnavn, da der jo ikke er nogen endnu.
-  const summary = slot.status === 'booket'
-    ? 'RC Træning' + (client ? ' — ' + client.name : '')
-    : 'RC Træning (reserveret tid)';
+  // Frit navn (customName) vinder over den normale formatering, samme regel
+  // som appens slotToCalendarEvent()/rc-mobiles calendarSync.ts.
+  const summary = slot.customName
+    ? slot.customName
+    : slot.status === 'booket'
+      ? 'RC Træning' + (client ? ' — ' + client.name : '')
+      : 'RC Træning (reserveret tid)';
   return ['BEGIN:VEVENT',
     'UID:' + uid,
     'DTSTAMP:' + fmt(new Date()),
