@@ -124,6 +124,9 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 .score-btn{flex:1;height:48px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--card);color:var(--gray);font-family:'Inter',sans-serif;font-weight:700;font-size:22px;cursor:pointer;transition:all .15s}
 .score-btn.sel{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
 .score-btn:active{opacity:.7}
+/* Designgennemgang 2026-08-18 (Rune): 1-5-skalaerne manglede et hint om
+   hvad enderne betyder — matcher rc-mobiles CheckinScreen.tsx-rettelse. */
+.score-endpoints{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--gray)}
 
 /* ── PROGRAM BLOCK EDITOR (coach) ── */
 .block-row{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px}
@@ -699,6 +702,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
           <button class="score-btn" onclick="setScore('energy',4)">4</button>
           <button class="score-btn" onclick="setScore('energy',5)">5</button>
         </div>
+        <div class="score-endpoints"><span>Lav</span><span>Høj</span></div>
       </div>
       <div class="score-selector">
         <div class="score-label">😴 Søvn</div>
@@ -709,6 +713,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
           <button class="score-btn" onclick="setScore('sleep',4)">4</button>
           <button class="score-btn" onclick="setScore('sleep',5)">5</button>
         </div>
+        <div class="score-endpoints"><span>Dårlig</span><span>God</span></div>
       </div>
       <div class="score-selector">
         <div class="score-label">💪 Træning</div>
@@ -719,6 +724,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
           <button class="score-btn" onclick="setScore('training',4)">4</button>
           <button class="score-btn" onclick="setScore('training',5)">5</button>
         </div>
+        <div class="score-endpoints"><span>Dårlig</span><span>God</span></div>
       </div>
       <div class="field">
         <label>Besked / kommentar / spørgsmål (valgfri hvis du har sat mindst én score)</label>
