@@ -1737,7 +1737,8 @@ async function pushToSupabase() {
   await section('exercise_library', async () => {
     if (DATA.exerciseLibrary.length) {
       await sb.from('exercise_library').upsert(DATA.exerciseLibrary.map(e => ({
-        id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image_url: e.image || ''
+        id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', photo_url: e.image || '',
+        show_photo_to_clients: e.showImageToClients !== undefined ? !!e.showImageToClients : true
       })));
     }
     if (pendingDeletes.exerciseLibrary.size) {
@@ -2176,7 +2177,13 @@ async function refreshFromSupabase() {
       distanceLoggingEnabled: !!(coachRes.data && coachRes.data.distance_logging_enabled),
       distanceTypes: (coachRes.data && coachRes.data.distance_types && coachRes.data.distance_types.length) ? coachRes.data.distance_types : ['Løb', 'Gåtur', 'Cykling'],
       tanitaScanMonthlyLimit: (coachRes.data && coachRes.data.tanita_scan_monthly_limit !== undefined) ? coachRes.data.tanita_scan_monthly_limit : 2,
-      exerciseLibrary: (libRes.data || []).map(e => ({ id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image: e.image_url || '' })),
+      // Rune: "billeder lagt ind i appen, kan jeg ikke se på web versionen" —
+      // webappen læste den forældede image_url-kolonne, mens rc-mobile (og
+      // alle rigtige upload) skriver til photo_url + show_photo_to_clients.
+      // De to platforme har derfor haft hver sin, usynlige kopi af det samme
+      // "standardbillede"-koncept. image_url var tom for alle øvelser (0
+      // rækker) — ingen data at miste ved at skifte.
+      exerciseLibrary: (libRes.data || []).map(e => ({ id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image: e.photo_url || '', showImageToClients: e.show_photo_to_clients !== undefined ? !!e.show_photo_to_clients : true })),
       programTemplates: (tmplRes.data || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(t => ({ id: t.id, name: t.name, focus: t.focus || '', blocks: t.blocks || [] })),
       clients,
       checkins: (ciRes.data || []).map(ci => ({ id: ci.id, clientId: ci.client_id, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training, comment: ci.comment || '', reply: ci.reply || '', autoReplied: !!ci.auto_replied, fromCoach: !!ci.from_coach, hiddenForCoach: !!ci.hidden_for_coach, hiddenForClient: !!ci.hidden_for_client, snoozedUntil: ci.snoozed_until || null, coachSeen: !!ci.coach_seen })),
@@ -6991,7 +6998,12 @@ function openExerciseDetail(programId, libraryId, clientId) {
 function renderExercisePhoto(client, ex) {
   const wrap = document.getElementById('ex-detail-image-wrap');
   const photo = (client.exercisePhotos || {})[currentExerciseDetail.libraryId];
-  const img = photo || (ex && ex.image) || '';
+  // Coach ser altid standardbilledet (egen reference); klienten kun hvis
+  // "Vis for klienter" er slået til for øvelsen — matcher rc-mobiles
+  // showPhotoToClients-gating (ExerciseDetailScreen.tsx), som webappen
+  // manglede helt før nu.
+  const masterAllowed = currentUser === 'coach' || (ex && ex.showImageToClients !== false);
+  const img = photo || (masterAllowed && ex && ex.image) || '';
   wrap.innerHTML = img
     ? `<img src="${img}" style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)">`
     : `<div class="empty" style="padding:16px 0"><span class="empty-icon">📷</span><p>Intet billede endnu — tag et foto af maskinen på dit center</p></div>`;
