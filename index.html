@@ -7918,7 +7918,12 @@ function renderTrainingProgressWidget(clientId, isCoachView) {
   // Seneste registrerede træninger, med mulighed for at slette en fejllogget
   // registrering — vises altid til BÅDE coach og klienten selv, uafhængigt af
   // "vis træningsmål"-togglen (det handler om at rette en fejl, ikke om at se fremgang).
-  const recentLogs = allLogsForClient.sort((a,b) => b.date.localeCompare(a.date)).slice(0, 5);
+  // "date" alene er en ren dato-streng (intet klokkeslæt) — flere træninger
+  // logget SAMME dag er derfor "uafgjort" på selve sorteringen; id (som er
+  // en tidsstempel-baseret tæller, se genId()) bruges som sekundær,
+  // entydig sortering, så den nyest OPRETTEDE altid lander øverst, ikke
+  // bare den nyeste dato.
+  const recentLogs = allLogsForClient.sort((a,b) => b.date.localeCompare(a.date) || b.id - a.id).slice(0, 5);
   let recentHtml = '';
   if (recentLogs.length) {
     recentHtml = `<div class="card" style="margin-bottom:16px">
