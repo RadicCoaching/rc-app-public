@@ -941,7 +941,9 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
      thumbnail uden nogen måde at se det ordentligt eller "gå tilbage" fra. -->
 <div class="modal-overlay" id="modal-photo-viewer" onclick="if(event.target===this)closeModal('modal-photo-viewer')">
   <div style="display:flex;flex-direction:column;align-items:center;gap:12px;max-width:100%;max-height:100%">
-    <img id="photo-viewer-img" src="" style="max-width:100%;max-height:80vh;border-radius:var(--radius);object-fit:contain">
+    <div style="max-width:100%;max-height:80vh;overflow:hidden;display:flex;align-items:center;justify-content:center">
+      <img id="photo-viewer-img" src="" style="max-width:100%;max-height:80vh;border-radius:var(--radius);object-fit:contain;touch-action:none">
+    </div>
     <button class="btn" onclick="closeModal('modal-photo-viewer')">‹ Tilbage</button>
   </div>
 </div>
@@ -7005,7 +7007,7 @@ function renderExercisePhoto(client, ex) {
   const masterAllowed = currentUser === 'coach' || (ex && ex.showImageToClients !== false);
   const img = photo || (masterAllowed && ex && ex.image) || '';
   wrap.innerHTML = img
-    ? `<img src="${img}" style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)">`
+    ? `<img src="${img}" style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:pointer" onclick="openPhotoViewer('${img.replace(/'/g, "\\'")}')">`
     : `<div class="empty" style="padding:16px 0"><span class="empty-icon">📷</span><p>Intet billede endnu — tag et foto af maskinen på dit center</p></div>`;
 }
 
@@ -9103,7 +9105,65 @@ function openPhotoViewer(src) {
   if (!src) return;
   document.getElementById('photo-viewer-img').src = src;
   document.getElementById('modal-photo-viewer').classList.add('open');
+  resetPhotoViewerZoom();
 }
+
+// Rune: "Kan man som klient trykke på billedet og zoome/forstørre?" — siden
+// har `maximum-scale=1.0` i viewport-metataget (bevidst sat for at undgå at
+// iOS Safari auto-zoomer ved tryk i et tekstfelt), som samtidig blokerer
+// almindelig browser-pinch-zoom OVERALT på siden, ikke kun her. I stedet for
+// at røre det globale metatag (uforudsigelige sideeffekter andre steder)
+// bygges rigtig pinch-to-zoom + træk specifikt til dette billede, samme
+// princip som rc-mobiles PhotoViewerModal.tsx (samme omgang).
+let pvScale = 1, pvStartScale = 1, pvStartDist = 0;
+let pvTranslateX = 0, pvTranslateY = 0, pvPanStartX = 0, pvPanStartY = 0, pvPanning = false;
+
+function resetPhotoViewerZoom() {
+  pvScale = 1; pvTranslateX = 0; pvTranslateY = 0;
+  const img = document.getElementById('photo-viewer-img');
+  if (img) img.style.transform = '';
+}
+
+function pvApplyTransform() {
+  const img = document.getElementById('photo-viewer-img');
+  img.style.transform = `translate(${pvTranslateX}px, ${pvTranslateY}px) scale(${pvScale})`;
+}
+
+function pvDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+(function setupPhotoViewerZoom() {
+  const img = document.getElementById('photo-viewer-img');
+  if (!img) return;
+  img.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) {
+      pvStartDist = pvDist(e.touches);
+      pvStartScale = pvScale;
+    } else if (e.touches.length === 1 && pvScale > 1) {
+      pvPanning = true;
+      pvPanStartX = e.touches[0].clientX - pvTranslateX;
+      pvPanStartY = e.touches[0].clientY - pvTranslateY;
+    }
+  }, { passive: true });
+  img.addEventListener('touchmove', e => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      pvScale = Math.max(1, Math.min(5, pvStartScale * (pvDist(e.touches) / pvStartDist)));
+      pvApplyTransform();
+    } else if (e.touches.length === 1 && pvPanning) {
+      e.preventDefault();
+      pvTranslateX = e.touches[0].clientX - pvPanStartX;
+      pvTranslateY = e.touches[0].clientY - pvPanStartY;
+      pvApplyTransform();
+    }
+  }, { passive: false });
+  img.addEventListener('touchend', e => {
+    if (e.touches.length === 0) pvPanning = false;
+  });
+})();
 
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
