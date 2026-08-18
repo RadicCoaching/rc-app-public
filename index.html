@@ -3272,16 +3272,16 @@ function renderCoachDashboard() {
         if (prog.overallDone) {
           trainingBadge = `<span title="Alle træningsmål nået denne uge" style="font-size:11px;font-weight:700;background:var(--accent);color:#111;padding:1px 7px;border-radius:10px;margin-left:6px;white-space:nowrap">🏆 Mål nået</span>`;
         } else {
+          // Rune: "hvorfor blev min og nikitas blå når alle andre er en anden
+          // farve? Det skal være ens ved alle klienter" — "der må gerne være
+          // farve på teksten, men den skal bare være ens på alle klienter."
+          // Farve varierede før efter status (gul/grå/blå), så to klienter
+          // kunne ligne hinanden forskelligt afhængigt af hvor langt de var
+          // nået denne specifikke uge. Alle chips ser nu ens ud for alle
+          // klienter; "i mål" markeres kun med et ✓ i selve teksten.
           const chips = prog.goals.map(g => {
-            const bg = g.done ? 'var(--accent)' : 'var(--border)';
-            // Rune: "jeg selv og nikita har grå skrift ... alle andre er farvede.
-            // Det hele skal være ens" — "i gang, ikke i mål endnu" faldt tidligere
-            // tilbage til den samme grå tekst som baggrunden, og så ud som om intet
-            // skete. Får nu sin egen farve (blå, samme som klientens egen
-            // fremgangs-bar), så alle tre tilstande (ikke startet/i gang/i mål) er
-            // synligt farvede, uanset hvilken specifik uge en klient rammer.
-            const fg = g.done ? '#111' : (g.count === 0 ? 'var(--warn)' : 'var(--accent-blue)');
-            return `<span style="font-size:11px;font-weight:${g.count === 0 ? 700 : 400};background:${bg};color:${fg};padding:1px 7px;border-radius:10px;white-space:nowrap">${escapeHtml(g.type)} ${g.count}/${g.target}</span>`;
+            const label = `${escapeHtml(g.type)} ${g.count}/${g.target}${g.done ? ' ✓' : ''}`;
+            return `<span style="font-size:11px;font-weight:700;background:var(--border);color:var(--accent-blue);padding:1px 7px;border-radius:10px;white-space:nowrap">${label}</span>`;
           }).join('');
           progressRow = `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">${chips}</div>`;
         }
