@@ -534,6 +534,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     </div>
     <div class="content">
       <div class="section-head" id="coach-inbox-heading">Indbakke</div>
+      <div id="coach-inbox-actions" style="display:none;text-align:center;margin-bottom:14px"></div>
       <div id="coach-inbox-list"></div>
     </div>
   </div>
@@ -1963,7 +1964,8 @@ async function pushToSupabase() {
       const { error } = await sb.from('checkins').upsert(toUpsert.map(ci => ({
         id: ci.id, client_id: ci.clientId, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training,
         comment: ci.comment || '', reply: ci.reply || '', auto_replied: !!ci.autoReplied, from_coach: !!ci.fromCoach,
-        hidden_for_coach: !!ci.hiddenForCoach, hidden_for_client: !!ci.hiddenForClient, snoozed_until: ci.snoozedUntil || null
+        hidden_for_coach: !!ci.hiddenForCoach, hidden_for_client: !!ci.hiddenForClient, snoozed_until: ci.snoozedUntil || null,
+        coach_seen: !!ci.coachSeen
       })));
       // Vises synligt i appen (ikke kun konsollen), så en fejl kan opdages uden
       // udviklerværktøjer — check-ins er ikke i CRITICAL_SYNC_SECTIONS foroven,
@@ -2171,7 +2173,7 @@ async function refreshFromSupabase() {
       exerciseLibrary: (libRes.data || []).map(e => ({ id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image: e.image_url || '' })),
       programTemplates: (tmplRes.data || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(t => ({ id: t.id, name: t.name, focus: t.focus || '', blocks: t.blocks || [] })),
       clients,
-      checkins: (ciRes.data || []).map(ci => ({ id: ci.id, clientId: ci.client_id, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training, comment: ci.comment || '', reply: ci.reply || '', autoReplied: !!ci.auto_replied, fromCoach: !!ci.from_coach, hiddenForCoach: !!ci.hidden_for_coach, hiddenForClient: !!ci.hidden_for_client, snoozedUntil: ci.snoozed_until || null })),
+      checkins: (ciRes.data || []).map(ci => ({ id: ci.id, clientId: ci.client_id, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training, comment: ci.comment || '', reply: ci.reply || '', autoReplied: !!ci.auto_replied, fromCoach: !!ci.from_coach, hiddenForCoach: !!ci.hidden_for_coach, hiddenForClient: !!ci.hidden_for_client, snoozedUntil: ci.snoozed_until || null, coachSeen: !!ci.coach_seen })),
       appointments: (aptRes.data || []).map(a => ({ id: a.id, clientId: a.client_id, date: a.date, time: a.time || '', title: a.title, coachOnly: !!a.coach_only, durationMin: a.duration_min || 60, location: a.location || '' })),
       bodyMetrics: (bmRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, weight: m.weight })),
       runLogs: (rlRes.data || []).map(r => ({ id: r.id, clientId: r.client_id, date: r.date, distanceKm: r.distance_km, durationSec: r.duration_sec, note: r.note || '', interval: r.interval_data || null, type: r.type || 'Løb' })),
@@ -3031,7 +3033,7 @@ async function refreshInboxVideoItems() {
 
 function buildInboxItems() {
   const items = [];
-  DATA.checkins.filter(ci => !ci.reply && !ci.autoReplied && !ci.hiddenForCoach && !isSnoozed(ci.snoozedUntil)).forEach(ci => {
+  DATA.checkins.filter(ci => !ci.reply && !ci.autoReplied && !ci.hiddenForCoach && !ci.coachSeen && !isSnoozed(ci.snoozedUntil)).forEach(ci => {
     const client = DATA.clients.find(c => c.id === ci.clientId);
     items.push({
       key: 'checkin-' + ci.id, kind: 'checkin', id: ci.id, clientId: ci.clientId,
@@ -3090,15 +3092,22 @@ function closeCoachInbox() {
   renderCoachDashboard();
 }
 
+let lastInboxItems = [];
+
 async function renderCoachInbox() {
   await refreshInboxVideoItems();
   const items = buildInboxItems();
+  lastInboxItems = items;
   document.getElementById('coach-inbox-heading').textContent = `Indbakke (${items.length})`;
+  const actionsEl = document.getElementById('coach-inbox-actions');
   const el = document.getElementById('coach-inbox-list');
   if (!items.length) {
+    actionsEl.style.display = 'none';
     el.innerHTML = '<div class="empty"><span class="empty-icon">🎉</span><p>Ingen ting venter</p></div>';
     return;
   }
+  actionsEl.style.display = 'block';
+  actionsEl.innerHTML = `<button class="btn btn-sm" onclick="markAllInboxItemsSeen()">✓ Markér alle som set</button>`;
   const snoozeOptions = [
     { label: '1t', ms: 60 * 60 * 1000 },
     { label: 'I morgen', ms: 24 * 60 * 60 * 1000 },
@@ -3158,6 +3167,36 @@ async function snoozeInboxItem(kind, id, ms) {
       try { await sb.from('video_messages').update({ snoozed_until: until }).eq('id', id); }
       catch (err) { console.error('Kunne ikke udsætte videobesked', err); }
     }
+  }
+  renderCoachInbox();
+  refreshInboxNotifications();
+}
+
+// Rune: "mangler jeg en funktion at jeg kan 'tjekke dem alle af' på en gang
+// hvis nødvendigt? Lige nu har jeg 100 ting der venter." — mest historisk
+// baglæns fra før Indbakken fandtes, ikke reelle uafklarede beskeder.
+// Markerer alt der er listet lige nu som set (checkins/training: coachSeen,
+// video: viewed_at) — påvirker IKKE Beskeder-tråden (stadig uændret
+// synlig/besvarlig som altid) og sletter ingenting, bare fjerner det fra
+// Indbakken. Porteret fra rc-mobile (samme omgang).
+async function markAllInboxItemsSeen() {
+  if (!lastInboxItems.length) return;
+  if (!confirm(`Markér alle ${lastInboxItems.length} som set?\n\nFjerner dem fra Indbakken. Beskeder og træningslog forbliver stadig synlige de vanlige steder — dette rører kun Indbakken.`)) return;
+  const checkinIds = lastInboxItems.filter(i => i.kind === 'checkin').map(i => i.id);
+  const trainingIds = lastInboxItems.filter(i => i.kind === 'training').map(i => i.id);
+  const videoIds = lastInboxItems.filter(i => i.kind === 'video').map(i => i.id);
+  checkinIds.forEach(id => {
+    const ci = DATA.checkins.find(c => c.id === id);
+    if (ci) { ci.coachSeen = true; coachDirtyCheckinIds.add(id); }
+  });
+  trainingIds.forEach(id => {
+    const t = DATA.trainingCheckins.find(x => x.id === id);
+    if (t) t.coachSeen = true;
+  });
+  if (checkinIds.length || trainingIds.length) save();
+  if (videoIds.length && sb) {
+    try { await sb.from('video_messages').update({ viewed_at: new Date().toISOString() }).in('id', videoIds); }
+    catch (err) { console.error('Kunne ikke markere videobeskeder som set', err); }
   }
   renderCoachInbox();
   refreshInboxNotifications();
