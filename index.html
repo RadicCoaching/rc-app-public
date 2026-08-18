@@ -6861,7 +6861,12 @@ function formatWeightDisplay(w) {
     return parsed.extra ? `BW (${parsed.value} kg) + ${parsed.extra} kg` : `BW (${parsed.value} kg)`;
   }
   if (parsed.mode === 'sec') return `${parsed.value} sek`;
-  const isNumeric = !isNaN(parseFloat(w)) && isFinite(w);
+  // Rune: "12,5" manglede "kg" bagved, mens "410" fik det — isFinite() (i
+  // modsætning til parseFloat()) forstår ikke dansk komma som decimaltegn,
+  // så en kommatal-streng faldt igennem til uppercase-fallback i stedet for
+  // at blive genkendt som et tal. Samme rettelse som rc-mobile (samme omgang).
+  const normalized = String(w).replace(',', '.');
+  const isNumeric = !isNaN(parseFloat(normalized)) && isFinite(Number(normalized));
   return isNumeric ? (w + ' kg') : String(w).toUpperCase();
 }
 
@@ -7535,8 +7540,14 @@ function renderProgressOevelser(clientId, panelId) {
   const logs = (program.weightLogs[selected.key] || []).slice().sort((a,b) => a.date.localeCompare(b.date));
   // "BW" (kropsvægt) kan ikke plottes som et tal — de målinger springes over i
   // selve grafen, men ses stadig i historikken under Program-fanen.
-  const numericLogs = logs.filter(l => l.weight !== '' && !isNaN(parseFloat(l.weight)) && isFinite(l.weight));
-  const points = numericLogs.map(l => ({ date: l.date, value: parseFloat(l.weight) }));
+  // Dansk komma som decimaltegn normaliseres FØR parseFloat — ellers stopper
+  // parseFloat('12,5') ved kommaet og giver 12, ikke 12.5 (samme fejlklasse
+  // som formatWeightDisplay ovenfor, rettet samme omgang).
+  const numericLogs = logs.filter(l => {
+    const n = String(l.weight).replace(',', '.');
+    return l.weight !== '' && !isNaN(parseFloat(n)) && isFinite(Number(n));
+  });
+  const points = numericLogs.map(l => ({ date: l.date, value: parseFloat(String(l.weight).replace(',', '.')) }));
   const bwCount = logs.length - numericLogs.length;
 
   el.innerHTML = dropdownHtml +
