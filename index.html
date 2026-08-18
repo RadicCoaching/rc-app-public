@@ -579,7 +579,6 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       <button class="btn btn-block" style="margin:-8px 0 4px;font-size:13px" onclick="registerBiometric('client', currentUser)">🔓 Aktivér Face ID/fingeraftryk-login på denne enhed</button>
       <button class="btn btn-block" style="margin-bottom:4px;font-size:13px" onclick="enablePushNotifications()">🔔 Aktivér notifikationer på denne enhed</button>
       <div class="card-sub push-status-el" style="margin-bottom:16px">Tjekker status...</div>
-      <div id="client-home-video-messages"></div>
       <div id="client-home-checkins"></div>
     </div>
     <div class="bottomnav">
@@ -3376,6 +3375,28 @@ function scoreRowHtml(ci) {
   if (ci.training != null) chips.push(`<div class="score-chip"><div class="score-val s${ci.training}">${ci.training}</div><div class="score-lbl">Træning</div></div>`);
   if (!chips.length) return '';
   return `<div class="score-row">${chips.join('')}</div>`;
+}
+
+// Ét check-in-kort til klientens forside-historik ("Seneste beskeder") —
+// udskilt fra renderClientHome() så det kan flettes kronologisk sammen med
+// videobeskeder i renderClientHomeVideoMessages() i stedet for at stå som to
+// separate, ikke-tidssorterede lister.
+function checkinHistoryCardHtml(ci) {
+  if (ci.fromCoach) {
+    return `<div class="checkin-card">
+      <div class="checkin-header"><div class="checkin-time">${fmtDate(ci.date)}</div><button class="btn-icon" title="Fjern fra din visning" onclick="hideCheckinForClient(${ci.id})">✕</button></div>
+      <div class="checkin-reply"><div class="reply-lbl">Rune</div>${escapeHtml(ci.reply || '')}</div>
+    </div>`;
+  }
+  return `<div class="checkin-card">
+    <div class="checkin-header">
+      <div class="checkin-time">${fmtDate(ci.date)}</div>
+      <button class="btn-icon" title="Fjern fra din visning" onclick="hideCheckinForClient(${ci.id})">✕</button>
+    </div>
+    ${scoreRowHtml(ci)}
+    ${ci.comment ? `<div class="checkin-comment">"${escapeHtml(ci.comment)}"</div>` : ''}
+    ${ci.reply ? `<div class="checkin-reply"><div class="reply-lbl">Rune${ci.autoReplied ? '<span class="auto-badge">Auto</span>' : ''}</div>${escapeHtml(ci.reply)}</div>` : ''}
+  </div>`;
 }
 
 function renderCheckinCard(ci, client, showReply = false) {
@@ -6586,32 +6607,6 @@ function renderClientHome() {
     lastCiEl.innerHTML = '';
   }
 
-  // History
-  const histEl = document.getElementById('client-home-checkins');
-  const rest = cis.slice(1, 5);
-  if (rest.length) {
-    histEl.innerHTML = `<div class="section-head">Tidligere check-ins</div>` +
-      rest.map(ci => {
-        if (ci.fromCoach) {
-          return `<div class="checkin-card">
-            <div class="checkin-header"><div class="checkin-time">${fmtDate(ci.date)}</div><button class="btn-icon" title="Fjern fra din visning" onclick="hideCheckinForClient(${ci.id})">✕</button></div>
-            <div class="checkin-reply"><div class="reply-lbl">Rune</div>${escapeHtml(ci.reply || '')}</div>
-          </div>`;
-        }
-        return `<div class="checkin-card">
-        <div class="checkin-header">
-          <div class="checkin-time">${fmtDate(ci.date)}</div>
-          <button class="btn-icon" title="Fjern fra din visning" onclick="hideCheckinForClient(${ci.id})">✕</button>
-        </div>
-        ${scoreRowHtml(ci)}
-        ${ci.comment ? `<div class="checkin-comment">"${escapeHtml(ci.comment)}"</div>` : ''}
-        ${ci.reply ? `<div class="checkin-reply"><div class="reply-lbl">Rune${ci.autoReplied ? '<span class="auto-badge">Auto</span>' : ''}</div>${escapeHtml(ci.reply)}</div>` : ''}
-      </div>`;
-      }).join('');
-  } else {
-    histEl.innerHTML = '';
-  }
-
   // Check-in-knappen kan slås fra af coachen pr. klient
   const btnEl = document.getElementById('client-checkin-btn-wrap');
   if (btnEl) {
@@ -6627,12 +6622,31 @@ function renderClientHome() {
 // check-ins (se sendVideoMessageWeb()/loadVideoMessages() nedenfor). Asynkron,
 // kaldes efter selve renderClientHome()'s synkrone opbygning, samme mønster
 // som ts-quota i openScanTanitaModal().
+//
+// Rune (designgennemgang 2026-08-18): videobeskeder og check-in-historikken
+// stod tidligere som to helt separate lister (video altid øverst, check-ins
+// altid nedenunder) — ikke sorteret efter hvad der faktisk var nyest. Fletter
+// nu begge kilder til én kronologisk liste, samme princip som rc-mobiles
+// ClientMessagesScreen.tsx. Check-ins har kun dato (ingen klokkeslæt), så et
+// eventuelt "uafgjort" mellem en video og et check-in samme dag afgøres af
+// rækkefølgen i .sort()'ens input (stabil sortering) — ingen praktisk
+// betydning, da begge under alle omstændigheder ligger øverst i listen.
 async function renderClientHomeVideoMessages(clientId) {
-  const el = document.getElementById('client-home-video-messages');
+  const el = document.getElementById('client-home-checkins');
   if (!el) return;
+
+  const cis = DATA.checkins.filter(c => c.clientId === clientId && !c.hiddenForClient).sort((a, b) => b.date.localeCompare(a.date));
+  const restCheckins = cis.slice(1, 5); // den øverste vises separat i "last-ci"-spotlightet ovenfor
+
   const rows = await loadVideoMessages(clientId, 'client');
   if (currentUser !== clientId) return; // klienten kan have skiftet visning imens
-  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Rune' : 'Dig', 'hideVideoMessageForClient', v => v.from_coach);
+
+  const combined = [
+    ...restCheckins.map(ci => ({ ts: new Date(ci.date).getTime(), html: checkinHistoryCardHtml(ci) })),
+    ...rows.map(v => ({ ts: new Date(v.created_at).getTime(), html: videoMessageCardHtml(v, x => x.from_coach ? 'Rune' : 'Dig', 'hideVideoMessageForClient', x => x.from_coach) })),
+  ].sort((a, b) => b.ts - a.ts);
+
+  el.innerHTML = combined.length ? `<div class="section-head">Seneste beskeder</div>` + combined.map(c => c.html).join('') : '';
 }
 
 function resetCheckinForm() {
@@ -8813,9 +8827,8 @@ async function loadVideoMessages(clientId, viewer) {
 // modtageren) markerer den som set. Se markVideoMessageViewedWeb() og
 // cleanup-video-messages-Edge Function'en (rc-mobile-repoet) for selve
 // 15-minutters-sletningen.
-async function videoMessagesHtml(rows, senderLabelFn, hideFnName, isRecipientFn) {
-  if (!rows.length) return '';
-  return rows.map(v => `<div class="checkin-card">
+function videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn) {
+  return `<div class="checkin-card">
     <div class="checkin-header">
       <div class="checkin-time">${fmtDate((v.created_at || '').split('T')[0])} · ${escapeHtml(senderLabelFn(v))}</div>
       <button class="btn-icon" title="Fjern (kun fra din visning)" onclick="${hideFnName}(${v.id})">✕</button>
@@ -8826,7 +8839,12 @@ async function videoMessagesHtml(rows, senderLabelFn, hideFnName, isRecipientFn)
         : `<button class="btn btn-block" onclick="revealVideoMessage(${v.id}, '${v.video_path}', ${isRecipientFn(v) ? 'true' : 'false'})">▶ Tryk for at se video</button>`}
     </div>
     ${v.caption ? `<div class="checkin-comment" style="margin-top:8px">"${escapeHtml(v.caption)}"</div>` : ''}
-  </div>`).join('');
+  </div>`;
+}
+
+async function videoMessagesHtml(rows, senderLabelFn, hideFnName, isRecipientFn) {
+  if (!rows.length) return '';
+  return rows.map(v => videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn)).join('');
 }
 
 async function revealVideoMessage(id, videoPath, isRecipient) {
