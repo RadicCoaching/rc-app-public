@@ -316,6 +316,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       <span class="toggle-label" id="coach-status-label"><strong>Online</strong> — klienter kan få svar</span>
     </div>
     <div class="content">
+      <div id="coach-inbox-strip" style="display:none;margin-bottom:16px"></div>
       <div id="coach-booking-notifications" style="display:none;margin-bottom:16px"></div>
       <div id="coach-goal-notifications" style="display:none;margin-bottom:16px"></div>
       <div id="coach-birthday-notifications" style="display:none;margin-bottom:16px"></div>
@@ -520,6 +521,20 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       </div>
       <div id="detail-notes" style="display:none;padding:16px 16px 80px"></div>
       <div id="detail-settings" style="display:none;padding:16px 16px 80px"></div>
+    </div>
+  </div>
+
+  <!-- COACH: INDBAKKE (2026-08-18) — samlet svar/se/udsæt-liste for
+       ubesvarede check-ins, uafspillede videobeskeder og usete træningslog-
+       registreringer. Nås fra "🔔 N ting venter"-strippen på Oversigt, ikke
+       en fast bundnav-fane. -->
+  <div id="coach-inbox" class="coach-view" style="display:none">
+    <div class="topbar">
+      <button class="back-btn" onclick="closeCoachInbox()">← Tilbage</button>
+    </div>
+    <div class="content">
+      <div class="section-head" id="coach-inbox-heading">Indbakke</div>
+      <div id="coach-inbox-list"></div>
     </div>
   </div>
 
@@ -1882,7 +1897,7 @@ async function pushToSupabase() {
   });
   await section('training_checkins', async () => {
     if (!DATA.trainingCheckins || !DATA.trainingCheckins.length) return;
-    const rowOf = t => ({ id: t.id, client_id: t.clientId, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo_url: t.photo || '', run_log_id: t.runLogId || null });
+    const rowOf = t => ({ id: t.id, client_id: t.clientId, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo_url: t.photo || '', run_log_id: t.runLogId || null, coach_seen: !!t.coachSeen, snoozed_until: t.snoozedUntil || null });
     if (currentUser === 'coach') {
       const { error } = await sb.from('training_checkins').upsert(DATA.trainingCheckins.map(rowOf));
       if (error) { showToast('⚠ Træningslog fejlede: ' + error.message); throw error; }
@@ -1948,7 +1963,7 @@ async function pushToSupabase() {
       const { error } = await sb.from('checkins').upsert(toUpsert.map(ci => ({
         id: ci.id, client_id: ci.clientId, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training,
         comment: ci.comment || '', reply: ci.reply || '', auto_replied: !!ci.autoReplied, from_coach: !!ci.fromCoach,
-        hidden_for_coach: !!ci.hiddenForCoach, hidden_for_client: !!ci.hiddenForClient
+        hidden_for_coach: !!ci.hiddenForCoach, hidden_for_client: !!ci.hiddenForClient, snoozed_until: ci.snoozedUntil || null
       })));
       // Vises synligt i appen (ikke kun konsollen), så en fejl kan opdages uden
       // udviklerværktøjer — check-ins er ikke i CRITICAL_SYNC_SECTIONS foroven,
@@ -2156,11 +2171,11 @@ async function refreshFromSupabase() {
       exerciseLibrary: (libRes.data || []).map(e => ({ id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image: e.image_url || '' })),
       programTemplates: (tmplRes.data || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(t => ({ id: t.id, name: t.name, focus: t.focus || '', blocks: t.blocks || [] })),
       clients,
-      checkins: (ciRes.data || []).map(ci => ({ id: ci.id, clientId: ci.client_id, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training, comment: ci.comment || '', reply: ci.reply || '', autoReplied: !!ci.auto_replied, fromCoach: !!ci.from_coach, hiddenForCoach: !!ci.hidden_for_coach, hiddenForClient: !!ci.hidden_for_client })),
+      checkins: (ciRes.data || []).map(ci => ({ id: ci.id, clientId: ci.client_id, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training, comment: ci.comment || '', reply: ci.reply || '', autoReplied: !!ci.auto_replied, fromCoach: !!ci.from_coach, hiddenForCoach: !!ci.hidden_for_coach, hiddenForClient: !!ci.hidden_for_client, snoozedUntil: ci.snoozed_until || null })),
       appointments: (aptRes.data || []).map(a => ({ id: a.id, clientId: a.client_id, date: a.date, time: a.time || '', title: a.title, coachOnly: !!a.coach_only, durationMin: a.duration_min || 60, location: a.location || '' })),
       bodyMetrics: (bmRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, weight: m.weight })),
       runLogs: (rlRes.data || []).map(r => ({ id: r.id, clientId: r.client_id, date: r.date, distanceKm: r.distance_km, durationSec: r.duration_sec, note: r.note || '', interval: r.interval_data || null, type: r.type || 'Løb' })),
-      trainingCheckins: (tcRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo: t.photo_url || '', runLogId: t.run_log_id || null })),
+      trainingCheckins: (tcRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo: t.photo_url || '', runLogId: t.run_log_id || null, coachSeen: !!t.coach_seen, snoozedUntil: t.snoozed_until || null })),
       mealLogs: (mlRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, time: m.time || '', mealType: m.meal_type, note: m.note || '', photo: m.photo_url || '' })),
       sessionCredits: (scRes.data || []).map(s => ({ id: s.id, clientId: s.client_id, date: s.date, type: s.type, delta: s.delta, note: s.note || '' })),
       coachTasks: (ctRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, title: t.title, dayOfWeek: t.day_of_week })),
@@ -2260,6 +2275,8 @@ function rerenderCurrentView() {
       if (currentCoachCalTab === 'booking') renderCoachBookingSlots(); else renderCoachCalendar();
     }
     if (currentCoachView === 'library') renderExerciseLibrary();
+    const inboxEl = document.getElementById('coach-inbox');
+    if (inboxEl && inboxEl.style.display !== 'none') renderCoachInbox();
     if (currentClientId && editingProgramId === null) {
       if (currentDetailTab === 'history') renderDetailHistory(currentClientId);
       if (currentDetailTab === 'program') renderDetailProgram(currentClientId);
@@ -2981,6 +2998,171 @@ function progressSubtab(tab) {
 // ══════════════════════════════════════
 // COACH: DASHBOARD
 // ══════════════════════════════════════
+// ══════════════════════════════════════
+// COACH: INDBAKKE — samlet svar/se/udsæt-liste (checkins + video + træningslog)
+// ══════════════════════════════════════
+// Rune, 2026-08-18: "beskeder ... indtjekninger, træning ligninger optræder
+// på en eller anden måde på forsiden indtil jeg har forholdt mig til det ...
+// Jeg SKAL på en eller anden måde svare, reagerer eller kunne udsætte
+// beskeden." Porteret fra rc-mobiles CoachInboxScreen.tsx (samme omgang) —
+// samler tre eksisterende "afventer"-kilder i én liste med Svar/Se + Udsæt.
+// video_messages ligger bevidst uden for DATA (se Session 34) og hentes
+// derfor separat, kun når indbakken faktisk skal vises/opdateres.
+let inboxVideoItems = [];
+let inboxCount = 0;
+
+function isSnoozed(until) {
+  return !!until && new Date(until).getTime() > Date.now();
+}
+
+async function refreshInboxVideoItems() {
+  if (!sb) return;
+  const { data, error } = await sb.from('video_messages')
+    .select('id, client_id, created_at, caption, snoozed_until')
+    .eq('hidden_for_coach', false)
+    .eq('from_coach', false)
+    .is('viewed_at', null);
+  if (!error) {
+    inboxVideoItems = (data || []).map(v => ({
+      id: v.id, clientId: v.client_id, createdAt: v.created_at, caption: v.caption || '', snoozedUntil: v.snoozed_until || null
+    }));
+  }
+}
+
+function buildInboxItems() {
+  const items = [];
+  DATA.checkins.filter(ci => !ci.reply && !ci.autoReplied && !ci.hiddenForCoach && !isSnoozed(ci.snoozedUntil)).forEach(ci => {
+    const client = DATA.clients.find(c => c.id === ci.clientId);
+    items.push({
+      key: 'checkin-' + ci.id, kind: 'checkin', id: ci.id, clientId: ci.clientId,
+      clientName: client ? client.name : '(ukendt klient)', sortAt: ci.date, icon: '💬',
+      title: 'Check-in — ' + (client ? client.name : '(ukendt klient)'),
+      preview: ci.comment ? `"${ci.comment}"` : 'Ny check-in venter på svar',
+    });
+  });
+  inboxVideoItems.filter(v => !isSnoozed(v.snoozedUntil)).forEach(v => {
+    const client = DATA.clients.find(c => c.id === v.clientId);
+    items.push({
+      key: 'video-' + v.id, kind: 'video', id: v.id, clientId: v.clientId,
+      clientName: client ? client.name : '(ukendt klient)', sortAt: v.createdAt, icon: '🎥',
+      title: 'Videobesked — ' + (client ? client.name : '(ukendt klient)'),
+      preview: v.caption ? `"${v.caption}"` : 'Ny videobesked',
+    });
+  });
+  (DATA.trainingCheckins || []).filter(t => !t.coachSeen && !isSnoozed(t.snoozedUntil)).forEach(t => {
+    const client = DATA.clients.find(c => c.id === t.clientId);
+    items.push({
+      key: 'training-' + t.id, kind: 'training', id: t.id, clientId: t.clientId,
+      clientName: client ? client.name : '(ukendt klient)', sortAt: t.date, icon: '🏃',
+      title: t.type + ' — ' + (client ? client.name : '(ukendt klient)'),
+      preview: t.note ? `"${t.note}"` : 'Ny træning logget',
+    });
+  });
+  items.sort((a, b) => b.sortAt.localeCompare(a.sortAt));
+  return items;
+}
+
+async function refreshInboxNotifications() {
+  await refreshInboxVideoItems();
+  inboxCount = buildInboxItems().length;
+  const el = document.getElementById('coach-inbox-strip');
+  if (!el) return;
+  if (!inboxCount) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+  el.innerHTML = `<div class="card" style="background:rgba(240,165,0,0.12);border:1px solid rgba(240,165,0,0.3);cursor:pointer;display:flex;justify-content:space-between;align-items:center" onclick="openCoachInbox()">
+    <span style="color:var(--warn);font-weight:700">🔔 ${inboxCount} ting venter</span>
+    <span style="color:var(--warn);font-size:18px">›</span>
+  </div>`;
+}
+
+function openCoachInbox() {
+  document.querySelectorAll('.coach-view').forEach(v => v.style.display = 'none');
+  const el = document.getElementById('coach-inbox');
+  el.style.display = 'flex';
+  el.style.flexDirection = 'column';
+  renderCoachInbox();
+}
+
+function closeCoachInbox() {
+  document.getElementById('coach-inbox').style.display = 'none';
+  document.getElementById('coach-dashboard').style.display = 'flex';
+  document.getElementById('coach-dashboard').style.flexDirection = 'column';
+  renderCoachDashboard();
+}
+
+async function renderCoachInbox() {
+  await refreshInboxVideoItems();
+  const items = buildInboxItems();
+  document.getElementById('coach-inbox-heading').textContent = `Indbakke (${items.length})`;
+  const el = document.getElementById('coach-inbox-list');
+  if (!items.length) {
+    el.innerHTML = '<div class="empty"><span class="empty-icon">🎉</span><p>Ingen ting venter</p></div>';
+    return;
+  }
+  const snoozeOptions = [
+    { label: '1t', ms: 60 * 60 * 1000 },
+    { label: 'I morgen', ms: 24 * 60 * 60 * 1000 },
+    { label: '3 dage', ms: 3 * 24 * 60 * 60 * 1000 },
+  ];
+  el.innerHTML = items.map(item => {
+    const dateLabel = item.kind === 'video'
+      ? fmtDate(item.sortAt.slice(0, 10)) + ' kl. ' + new Date(item.sortAt).toTimeString().slice(0, 5)
+      : fmtDate(item.sortAt);
+    const actionLabel = item.kind === 'checkin' ? 'Svar' : 'Se';
+    const snoozeButtons = snoozeOptions.map(opt =>
+      `<button class="btn btn-sm" onclick="snoozeInboxItem('${item.kind}', ${item.id}, ${opt.ms})">${opt.label}</button>`
+    ).join('');
+    return `<div class="card" style="margin-bottom:8px">
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        <span style="font-size:20px">${item.icon}</span>
+        <div style="min-width:0;flex:1">
+          <div style="font-weight:700">${escapeHtml(item.title)}</div>
+          <div class="card-sub" style="margin-top:4px">${escapeHtml(item.preview)}</div>
+          <div style="color:var(--gray);font-size:11px;margin-top:6px">${dateLabel}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-sm btn-primary" onclick="openInboxItem('${item.kind}', ${item.id}, ${item.clientId})">${actionLabel}</button>
+        <span style="color:var(--gray);font-size:11px">Udsæt:</span>
+        ${snoozeButtons}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openInboxItem(kind, id, clientId) {
+  if (kind === 'training') {
+    const t = DATA.trainingCheckins.find(x => x.id === id);
+    if (t) { t.coachSeen = true; save(); refreshInboxNotifications(); }
+    openHistoryGroups.add('training');
+    openClientDetail(clientId);
+    return;
+  }
+  // checkin + video deler samme svar/se-flow (Beskeder-tråden), som allerede
+  // håndterer både svar-input og videoafspilning.
+  goToClientMessages(clientId);
+}
+
+async function snoozeInboxItem(kind, id, ms) {
+  const until = new Date(Date.now() + ms).toISOString();
+  if (kind === 'checkin') {
+    const ci = DATA.checkins.find(c => c.id === id);
+    if (ci) { ci.snoozedUntil = until; coachDirtyCheckinIds.add(id); save(); }
+  } else if (kind === 'training') {
+    const t = DATA.trainingCheckins.find(x => x.id === id);
+    if (t) { t.snoozedUntil = until; save(); }
+  } else if (kind === 'video') {
+    const v = inboxVideoItems.find(x => x.id === id);
+    if (v) v.snoozedUntil = until;
+    if (sb) {
+      try { await sb.from('video_messages').update({ snoozed_until: until }).eq('id', id); }
+      catch (err) { console.error('Kunne ikke udsætte videobesked', err); }
+    }
+  }
+  renderCoachInbox();
+  refreshInboxNotifications();
+}
+
 function refreshDashboardNotifications() {
   const goalCount = renderGoalNotifications();
   const bookingCount = renderBookingNotifications();
@@ -2993,6 +3175,7 @@ function refreshDashboardNotifications() {
 
 function renderCoachDashboard() {
   refreshDashboardNotifications();
+  refreshInboxNotifications();
   // Rune: "de er heller ikke som note på forsiden som coach at der er en
   // besked?" — kør en baggrundsopdatering af uafspillede videobeskeder pr.
   // klient, og gentegn kun hvis noget reelt har ændret sig (undgår løkke).
