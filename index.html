@@ -3758,6 +3758,54 @@ function showAddSlotModal() {
   document.getElementById('modal-add-slot').classList.add('open');
 }
 
+// Dansk-sikker "helt ord"-søgning — JS' indbyggede \b-regex regner kun
+// [A-Za-z0-9_] som "ord-tegn", så den fejlagtigt ville betragte æ/ø/å som
+// ord-grænser midt i et navn som "Søren". Portet fra rc-mobiles
+// calendarSync.ts (samme omgang) for at genbruge PRÆCIS samme logik.
+function isNameChar(ch) {
+  return !!ch && /[a-zA-ZæøåÆØÅ0-9]/.test(ch);
+}
+function containsWholeWord(haystack, needle) {
+  const h = haystack.toLowerCase();
+  const n = needle.trim().toLowerCase();
+  if (!n) return false;
+  let fromIndex = 0;
+  for (;;) {
+    const idx = h.indexOf(n, fromIndex);
+    if (idx === -1) return false;
+    if (!isNameChar(h[idx - 1]) && !isNameChar(h[idx + n.length])) return true;
+    fromIndex = idx + 1;
+  }
+}
+// Matcher fulde navn først (mest specifikt), falder tilbage til fornavn.
+// Er der FLERE mulige match, gættes der bevidst IKKE — bedre at tiden
+// forbliver fritekst end at blive booket på den forkerte klient.
+function matchClientFromTitle(title, clients) {
+  const fullNameMatches = clients.filter(c => containsWholeWord(title, c.name));
+  if (fullNameMatches.length === 1) return fullNameMatches[0];
+  if (fullNameMatches.length > 1) return null;
+  const firstNameMatches = clients.filter(c => {
+    const firstName = c.name.trim().split(/\s+/)[0];
+    return firstName ? containsWholeWord(title, firstName) : false;
+  });
+  return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
+}
+
+// Rune: "har rettet en tid og skrevet en nyoprettet klient på tiden...
+// men den har ikke ændret sig til grøn farve. Den er optaget men står
+// som ikke klient, kan dette ændres så jeg kan 'vælge deres navn' og
+// aftalen dermed bliver grøn og tildelt dem?" — "Navn på aftalen" var
+// hidtil altid ren fritekst, uafhængig af "Book til klient"-modalen.
+// Matcher nu navnet mod klientlisten og spørger om det skal tildeles i
+// stedet for gemmes som fritekst. Porteret fra rc-mobile (samme omgang).
+function tryMatchClientForCustomName(text) {
+  if (!text) return null;
+  const matched = matchClientFromTitle(text, DATA.clients);
+  if (!matched) return null;
+  const assign = confirm(`"${matched.name}" er oprettet som klient. Vil du tildele denne tid til ${matched.name} (bliver grøn/booket), i stedet for at gemme navnet som fritekst?`);
+  return assign ? matched : null;
+}
+
 async function saveNewSlot() {
   const date = document.getElementById('slot-date').value;
   const time = document.getElementById('slot-time').value;
@@ -3768,12 +3816,17 @@ async function saveNewSlot() {
   if (!date || !time) { showToast('Angiv dato og tidspunkt'); return; }
   if (addSlotVisibilityMode === 'udvalgte' && !addSlotSelectedClients.size) { showToast('Vælg mindst én klient, eller skift til Skjult/Alle'); return; }
   try { localStorage.setItem('rc_last_slot_location', location); } catch (err) { /* ignore */ }
+  const matchedClient = tryMatchClientForCustomName(customName || null);
+  const finalCustomName = matchedClient ? null : (customName || null);
   const slot = {
     id: genId(), date, time, durationMin,
     visibility: addSlotVisibilityMode,
     targetClientIds: addSlotVisibilityMode === 'udvalgte' ? [...addSlotSelectedClients] : [],
-    status: 'ledig', bookedByClientId: null, bookedAt: null, coachSeen: true, note, location,
-    customName: customName || null
+    status: matchedClient ? 'booket' : 'ledig',
+    bookedByClientId: matchedClient ? matchedClient.id : null,
+    bookedAt: matchedClient ? new Date().toISOString() : null,
+    coachSeen: true, note, location,
+    customName: finalCustomName
   };
   if (!DATA.bookingSlots) DATA.bookingSlots = [];
   DATA.bookingSlots.push(slot);
@@ -3784,8 +3837,9 @@ async function saveNewSlot() {
     try {
       const { error } = await sb.from('booking_slots').insert({
         id: slot.id, date: slot.date, time: slot.time, duration_min: slot.durationMin,
-        visibility: slot.visibility, target_client_ids: slot.targetClientIds, status: 'ledig', booked_by_client_id: null,
-        booked_at: null, coach_seen: true, note: slot.note || null, location: slot.location || null,
+        visibility: slot.visibility, target_client_ids: slot.targetClientIds, status: slot.status,
+        booked_by_client_id: slot.bookedByClientId, booked_at: slot.bookedAt,
+        coach_seen: true, note: slot.note || null, location: slot.location || null,
         custom_name: slot.customName
       });
       if (error) {
@@ -4047,8 +4101,17 @@ async function saveSlotDetails() {
   s.time = time;
   s.durationMin = parseInt(document.getElementById('edit-slot-duration').value, 10) || 60;
   s.location = document.getElementById('edit-slot-location').value.trim() || null;
-  s.customName = document.getElementById('edit-slot-custom-name').value.trim() || null;
+  const editedCustomName = document.getElementById('edit-slot-custom-name').value.trim() || null;
+  // Kun relevant for en tid der IKKE allerede er tildelt en klient — rører
+  // ikke ved en tid der allerede er korrekt booket.
+  const matchedClient = s.bookedByClientId ? null : tryMatchClientForCustomName(editedCustomName);
+  s.customName = matchedClient ? null : editedCustomName;
   s.note = document.getElementById('edit-slot-note').value.trim() || null;
+  if (matchedClient) {
+    s.status = 'booket';
+    s.bookedByClientId = matchedClient.id;
+    s.bookedAt = new Date().toISOString();
+  }
   save();
   closeModal('modal-edit-slot-details');
   renderCoachBookingSlots();
@@ -4056,7 +4119,8 @@ async function saveSlotDetails() {
     try {
       const { error } = await sb.from('booking_slots').update({
         date: s.date, time: s.time, duration_min: s.durationMin, location: s.location, note: s.note,
-        custom_name: s.customName
+        custom_name: s.customName,
+        ...(matchedClient ? { status: 'booket', booked_by_client_id: s.bookedByClientId, booked_at: s.bookedAt } : {})
       }).eq('id', s.id);
       if (error) { console.error('Kunne ikke gemme tid i Supabase', error); showToast('⚠ Gemning fejlede i skyen: ' + (error.message || 'ukendt fejl')); }
     } catch (err) { console.error('Kunne ikke gemme tid i Supabase', err); showToast('⚠ Gemning fejlede — prøv igen'); }
