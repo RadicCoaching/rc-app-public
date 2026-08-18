@@ -977,6 +977,9 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     </div>
     <div class="field"><label>Lokation (valgfrit — kommer med i kalender-filen)</label><input type="text" id="slot-location" placeholder="Fx Lemvig Motionscenter, Transportvej 21, 7620 Lemvig"></div>
     <div class="field"><label>Navn på aftalen (valgfrit, behøver ikke være en klient)</label><input type="text" id="slot-custom-name" placeholder="Fx 'Tandlæge' eller en persons navn"></div>
+    <div class="field"><label>Vælg klient (valgfrit — erstatter navnefeltet ovenfor)</label>
+      <select id="slot-picked-client"><option value="">Ingen / fritekst</option></select>
+    </div>
     <div class="field"><label>Note (valgfrit)</label><textarea id="slot-note" placeholder="Fx 'Individuel PT-session'" style="min-height:70px"></textarea></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-add-slot')">Annullér</button>
@@ -1050,6 +1053,9 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     <div class="field"><label>Varighed (min)</label><input type="number" id="edit-slot-duration" value="60"></div>
     <div class="field"><label>Sted</label><input type="text" id="edit-slot-location" placeholder="fx Lemvig Motionscenter"></div>
     <div class="field"><label>Navn på aftalen (valgfrit, behøver ikke være en klient)</label><input type="text" id="edit-slot-custom-name" placeholder="Fx 'Tandlæge' eller en persons navn"></div>
+    <div class="field"><label>Vælg klient (valgfrit — erstatter navnefeltet ovenfor)</label>
+      <select id="edit-slot-picked-client"><option value="">Ingen / fritekst</option></select>
+    </div>
     <div class="field"><label>Note</label><input type="text" id="edit-slot-note" placeholder="valgfri"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-edit-slot-details')">Annullér</button>
@@ -3755,6 +3761,9 @@ function showAddSlotModal() {
   document.getElementById('slot-location').value = localStorage.getItem('rc_last_slot_location') || 'Lemvig Motionscenter, Transportvej 21, 7620 Lemvig';
   document.getElementById('slot-custom-name').value = '';
   document.getElementById('slot-note').value = '';
+  document.getElementById('slot-picked-client').innerHTML = '<option value="">Ingen / fritekst</option>' +
+    DATA.clients.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  document.getElementById('slot-picked-client').value = '';
   document.getElementById('modal-add-slot').classList.add('open');
 }
 
@@ -3816,7 +3825,10 @@ async function saveNewSlot() {
   if (!date || !time) { showToast('Angiv dato og tidspunkt'); return; }
   if (addSlotVisibilityMode === 'udvalgte' && !addSlotSelectedClients.size) { showToast('Vælg mindst én klient, eller skift til Skjult/Alle'); return; }
   try { localStorage.setItem('rc_last_slot_location', location); } catch (err) { /* ignore */ }
-  const matchedClient = tryMatchClientForCustomName(customName || null);
+  // Direkte valgt klient (drop-ned) vinder altid over fritekst-matchet.
+  const pickedClientId = document.getElementById('slot-picked-client').value;
+  const pickedClient = pickedClientId ? DATA.clients.find(c => String(c.id) === pickedClientId) : null;
+  const matchedClient = pickedClient || tryMatchClientForCustomName(customName || null);
   const finalCustomName = matchedClient ? null : (customName || null);
   const slot = {
     id: genId(), date, time, durationMin,
@@ -4087,6 +4099,9 @@ function openEditSlotDetails(slotId) {
   document.getElementById('edit-slot-duration').value = s.durationMin || 60;
   document.getElementById('edit-slot-location').value = s.location || '';
   document.getElementById('edit-slot-custom-name').value = s.customName || '';
+  document.getElementById('edit-slot-picked-client').innerHTML = '<option value="">Ingen / fritekst</option>' +
+    DATA.clients.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  document.getElementById('edit-slot-picked-client').value = s.bookedByClientId != null ? String(s.bookedByClientId) : '';
   document.getElementById('edit-slot-note').value = s.note || '';
   document.getElementById('modal-edit-slot-details').classList.add('open');
 }
@@ -4102,9 +4117,12 @@ async function saveSlotDetails() {
   s.durationMin = parseInt(document.getElementById('edit-slot-duration').value, 10) || 60;
   s.location = document.getElementById('edit-slot-location').value.trim() || null;
   const editedCustomName = document.getElementById('edit-slot-custom-name').value.trim() || null;
-  // Kun relevant for en tid der IKKE allerede er tildelt en klient — rører
-  // ikke ved en tid der allerede er korrekt booket.
-  const matchedClient = s.bookedByClientId ? null : tryMatchClientForCustomName(editedCustomName);
+  // Direkte valgt klient (drop-ned) vinder altid — kan både tildele OG
+  // omtildele en allerede booket tid. Uden valg: fritekst-matchet er
+  // fallback, men kun for en tid der IKKE allerede er booket.
+  const pickedClientId = document.getElementById('edit-slot-picked-client').value;
+  const pickedClient = pickedClientId ? DATA.clients.find(c => String(c.id) === pickedClientId) : null;
+  const matchedClient = pickedClient || (s.bookedByClientId ? null : tryMatchClientForCustomName(editedCustomName));
   s.customName = matchedClient ? null : editedCustomName;
   s.note = document.getElementById('edit-slot-note').value.trim() || null;
   if (matchedClient) {
