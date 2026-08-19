@@ -5317,7 +5317,7 @@ function renderExerciseLibrary() {
   }
   el.innerHTML = lib.map(ex => `
     <div class="card" style="display:flex;gap:12px;align-items:flex-start;cursor:pointer" onclick="openLibraryEditor(${ex.id})">
-      ${ex.image ? `<img src="${ex.image}" style="width:56px;height:56px;object-fit:cover;border-radius:var(--radius-sm);flex-shrink:0;border:1px solid var(--border)">` : `<div style="width:56px;height:56px;border-radius:var(--radius-sm);background:var(--dark);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--gray)">🏋️</div>`}
+      ${ex.image ? `<img id="lib-thumb-${ex.id}" style="width:56px;height:56px;object-fit:cover;border-radius:var(--radius-sm);flex-shrink:0;border:1px solid var(--border)">` : `<div style="width:56px;height:56px;border-radius:var(--radius-sm);background:var(--dark);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--gray)">🏋️</div>`}
       <div style="min-width:0;flex:1">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="card-title" style="font-size:16px">${escapeHtml(ex.name)}</div>
@@ -5326,6 +5326,12 @@ function renderExerciseLibrary() {
         <div class="card-sub" style="overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escapeHtml(ex.description || 'Ingen beskrivelse endnu')}</div>
       </div>
     </div>`).join('');
+  // Thumbnails sat efter innerHTML (ikke inline i template-strengen) — en
+  // Storage-sti (migrerede billeder) kræver et async opslag efter en
+  // signeret URL, se setResolvableImgSrc().
+  lib.forEach(ex => {
+    if (ex.image) setResolvableImgSrc(document.getElementById(`lib-thumb-${ex.id}`), ex.image, 'exercise-photos');
+  });
 }
 
 let libraryEditImageData = null;
@@ -5334,7 +5340,10 @@ function openLibraryEditor(id) {
   const ex = id ? DATA.exerciseLibrary.find(e => e.id === id) : null;
   libraryEditImageData = ex ? (ex.image || null) : null;
   document.getElementById('library-editor-title').textContent = ex ? 'Redigér øvelse' : 'Ny øvelse';
-  document.getElementById('lib-edit-id').value = ex ? ex.id : '';
+  // Id genereres med det samme, også ved en HELT NY øvelse (ikke først ved
+  // Gem) — så et billede kan uploades til Storage under den rigtige sti FØR
+  // selve øvelsen er gemt. Matcher rc-mobiles ExerciseCatalogScreen.tsx.
+  document.getElementById('lib-edit-id').value = ex ? ex.id : genId();
   document.getElementById('lib-edit-name').value = ex ? ex.name : '';
   const catSel = document.getElementById('lib-edit-category');
   const currentCat = ex ? (ex.category || 'Andet') : 'Andet';
@@ -5348,16 +5357,22 @@ function openLibraryEditor(id) {
 
 function renderLibraryImagePreview() {
   const el = document.getElementById('lib-edit-image-preview');
-  el.innerHTML = libraryEditImageData
-    ? `<div style="position:relative;display:inline-block"><img src="${libraryEditImageData}" style="width:100px;height:100px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)"><button class="btn btn-sm btn-danger" style="position:absolute;top:-8px;right:-8px;padding:2px 8px" onclick="libraryEditImageData=null;renderLibraryImagePreview()">✕</button></div>`
-    : `<div class="card-sub">Intet billede valgt</div>`;
+  if (!libraryEditImageData) {
+    el.innerHTML = `<div class="card-sub">Intet billede valgt</div>`;
+    return;
+  }
+  el.innerHTML = `<div style="position:relative;display:inline-block"><img id="lib-edit-image-preview-img" style="width:100px;height:100px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)"><button class="btn btn-sm btn-danger" style="position:absolute;top:-8px;right:-8px;padding:2px 8px" onclick="libraryEditImageData=null;renderLibraryImagePreview()">✕</button></div>`;
+  setResolvableImgSrc(document.getElementById('lib-edit-image-preview-img'), libraryEditImageData, 'exercise-photos');
 }
 
 function handleLibraryImageUpload(inputEl) {
   const file = inputEl.files[0];
   if (!file) return;
-  resizeImageFile(file, 500, 0.75, dataUrl => {
-    libraryEditImageData = dataUrl;
+  const libraryId = document.getElementById('lib-edit-id').value;
+  resizeImageFileToBlob(file, 500, 0.75, async blob => {
+    const { path, error } = await uploadExerciseMedia('library-photo', { libraryId }, blob);
+    if (error) { alert('Billede-upload fejlede: ' + error); return; }
+    libraryEditImageData = path;
     renderLibraryImagePreview();
   });
 }
@@ -5382,20 +5397,90 @@ function resizeImageFile(file, maxDim, quality, callback) {
   reader.readAsDataURL(file);
 }
 
+// Samme resize/komprimering som resizeImageFile(), men returnerer en Blob i
+// stedet for en base64-dataURL — bruges til Storage-upload (exercise-media-urls),
+// hvor selve filens rå bytes skal sendes, ikke tekst.
+function resizeImageFileToBlob(file, maxDim, quality, callback) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > h && w > maxDim) { h = Math.round(h * maxDim / w); w = maxDim; }
+      else if (h > maxDim) { w = Math.round(w * maxDim / h); h = maxDim; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => callback(blob), 'image/jpeg', quality);
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// Videoklip/Storage-billeder på øvelser (Rune, 2026-08-19) — samme
+// rodårsag/mønster som video-messages: Storage verificerer ikke appens eget
+// login-JWT direkte, så upload/afspilning går via exercise-media-urls-
+// Edge Function'en (service-role). Se den funktion for detaljer.
+//
+// En værdi der IKKE starter med "data:" er en Storage-sti (fx
+// "library/42/photo.jpg") og skal slås op som en signeret URL før visning —
+// en gammel, endnu ikke migreret base64-værdi vises derimod direkte.
+function isExerciseMediaStoragePath(value) {
+  return !!value && !value.startsWith('data:');
+}
+
+async function resolveExerciseMediaUrl(bucket, path) {
+  const { data, error } = await sb.functions.invoke('exercise-media-urls', { body: { action: 'view', bucket, path } });
+  if (error || !data || data.error) return null;
+  return data.signedUrl || null;
+}
+
+// kind: 'library-photo' | 'library-video' | 'client-photo'
+async function uploadExerciseMedia(kind, ids, blob) {
+  const body = { action: 'upload', kind, library_id: ids.libraryId };
+  if (kind === 'client-photo') body.client_id = ids.clientId;
+  const { data: urlData, error: urlError } = await sb.functions.invoke('exercise-media-urls', { body });
+  if (urlError || !urlData || urlData.error) return { path: null, error: (urlData && urlData.error) || 'Kunne ikke klargøre upload' };
+  const { bucket, path, token } = urlData;
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/upload/sign/${bucket}/${path}?token=${token}`;
+  const res = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': blob.type, 'cache-control': '3600' }, body: blob });
+  if (!res.ok) return { path: null, error: `Upload fejlede (${res.status})` };
+  return { path, error: null };
+}
+
+// Sætter en <img>'s src ud fra en gemt medie-værdi — viser base64 med det
+// samme, slår en Storage-sti op asynkront først. wrapId's indhold sættes af
+// kalderen (denne funktion opdaterer kun selve billedet, ikke hele wrap'en).
+function setResolvableImgSrc(imgEl, value, bucket) {
+  if (!imgEl) return;
+  if (!isExerciseMediaStoragePath(value)) {
+    imgEl.src = value;
+    return;
+  }
+  resolveExerciseMediaUrl(bucket, value).then(url => {
+    if (url) imgEl.src = url;
+  });
+}
+
 function saveLibraryExercise() {
-  const idVal = document.getElementById('lib-edit-id').value;
+  // Id'et er sat allerede i openLibraryEditor() (også for en helt ny øvelse,
+  // så billed-upload kan ske før Gem) — afgør derfor om det er en
+  // opdatering eller en ny øvelse ud fra om id'et allerede findes i
+  // DATA.exerciseLibrary, ikke ud fra om feltet er udfyldt (det er det altid nu).
+  const idVal = Number(document.getElementById('lib-edit-id').value);
   const name = document.getElementById('lib-edit-name').value.trim();
   const category = document.getElementById('lib-edit-category').value || 'Andet';
   const description = document.getElementById('lib-edit-desc').value.trim();
   if (!name) { alert('Angiv et navn'); return; }
-  if (idVal) {
-    const ex = DATA.exerciseLibrary.find(e => e.id === Number(idVal));
+  const ex = DATA.exerciseLibrary.find(e => e.id === idVal);
+  if (ex) {
     ex.name = name;
     ex.category = category;
     ex.description = description;
     ex.image = libraryEditImageData || '';
   } else {
-    DATA.exerciseLibrary.push({ id: genId(), name, category, description, image: libraryEditImageData || '' });
+    DATA.exerciseLibrary.push({ id: idVal, name, category, description, image: libraryEditImageData || '' });
   }
   save();
   closeModal('modal-library-editor');
@@ -5878,7 +5963,7 @@ function renderProgramBlockEditor() {
     const name = ex ? ex.name : '(slettet øvelse)';
     return `<div class="block-row" ${rowAttrs}>
       ${handle}
-      ${ex && ex.image ? `<img src="${ex.image}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--dark);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:15px">🏋️</div>`}
+      ${ex && ex.image ? `<img id="block-thumb-${b.id}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--dark);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:15px">🏋️</div>`}
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:6px">
           <div style="font-weight:600;font-size:14px">${escapeHtml(name)}</div>
@@ -5895,6 +5980,11 @@ function renderProgramBlockEditor() {
       ${controls}
     </div>`;
   }).join('');
+  editingProgramBlocks.forEach(b => {
+    if (b.type !== 'exercise') return;
+    const ex = (DATA.exerciseLibrary || []).find(e => e.id === b.libraryId);
+    if (ex && ex.image) setResolvableImgSrc(document.getElementById(`block-thumb-${b.id}`), ex.image, 'exercise-photos');
+  });
 }
 
 function handleBlockDragStart(event, i) {
@@ -5987,7 +6077,7 @@ function renderExercisePickerList() {
   el.innerHTML = lib.map(ex => `
     <div class="picker-item">
       <span class="drag-handle" draggable="true" ondragstart="event.dataTransfer.setData('application/x-library-id', '${ex.id}'); event.dataTransfer.effectAllowed='copy'">⠿</span>
-      ${ex.image ? `<img src="${ex.image}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--dark);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:15px">🏋️</div>`}
+      ${ex.image ? `<img id="picker-thumb-${ex.id}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--dark);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:15px">🏋️</div>`}
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:600">${escapeHtml(ex.name)}</div>
         <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:.05em">${escapeHtml(ex.category || 'Andet')}</div>
@@ -5995,6 +6085,9 @@ function renderExercisePickerList() {
       <button class="btn-icon" title="Redigér" onclick="openLibraryEditor(${ex.id})">✎</button>
       <button class="btn btn-sm btn-primary" onclick="addExerciseBlockFromLibrary(${ex.id})">+ Tilføj</button>
     </div>`).join('');
+  lib.forEach(ex => {
+    if (ex.image) setResolvableImgSrc(document.getElementById(`picker-thumb-${ex.id}`), ex.image, 'exercise-photos');
+  });
 }
 
 function addExerciseBlockFromLibrary(libraryId) {
@@ -7017,7 +7110,7 @@ function openExerciseDetail(programId, libraryId, clientId) {
   document.getElementById('modal-exercise-detail').classList.add('open');
 }
 
-function renderExercisePhoto(client, ex) {
+async function renderExercisePhoto(client, ex) {
   const wrap = document.getElementById('ex-detail-image-wrap');
   const photo = (client.exercisePhotos || {})[currentExerciseDetail.libraryId];
   // Coach ser altid standardbilledet (egen reference); klienten kun hvis
@@ -7025,21 +7118,34 @@ function renderExercisePhoto(client, ex) {
   // showPhotoToClients-gating (ExerciseDetailScreen.tsx), som webappen
   // manglede helt før nu.
   const masterAllowed = currentUser === 'coach' || (ex && ex.showImageToClients !== false);
-  const img = photo || (masterAllowed && ex && ex.image) || '';
-  wrap.innerHTML = img
-    ? `<img src="${img}" style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:pointer" onclick="openPhotoViewer('${img.replace(/'/g, "\\'")}')">`
-    : `<div class="empty" style="padding:16px 0"><span class="empty-icon">📷</span><p>Intet billede endnu — tag et foto af maskinen på dit center</p></div>`;
+  const rawImg = photo || (masterAllowed && ex && ex.image) || '';
+  if (!rawImg) {
+    wrap.innerHTML = `<div class="empty" style="padding:16px 0"><span class="empty-icon">📷</span><p>Intet billede endnu — tag et foto af maskinen på dit center</p></div>`;
+    return;
+  }
+  // En Storage-sti (migrerede/nye billeder) kræver et async opslag efter en
+  // signeret URL FØR den kan vises eller sendes videre til openPhotoViewer.
+  wrap.innerHTML = `<div class="card-sub" style="padding:16px 0">Henter billede…</div>`;
+  const img = isExerciseMediaStoragePath(rawImg) ? await resolveExerciseMediaUrl('exercise-photos', rawImg) : rawImg;
+  if (!img) {
+    wrap.innerHTML = `<div class="card-sub" style="padding:16px 0">Kunne ikke hente billedet</div>`;
+    return;
+  }
+  wrap.innerHTML = `<img src="${img}" style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:pointer" onclick="openPhotoViewer('${img.replace(/'/g, "\\'")}')">`;
 }
 
 function handleExercisePhotoUpload(inputEl) {
   const file = inputEl.files[0];
   if (!file) return;
-  resizeImageFile(file, 480, 0.6, dataUrl => {
-    const client = DATA.clients.find(c => c.id === currentExerciseDetail.clientId);
+  const { clientId, libraryId } = currentExerciseDetail;
+  resizeImageFileToBlob(file, 480, 0.6, async blob => {
+    const { path, error } = await uploadExerciseMedia('client-photo', { clientId, libraryId }, blob);
+    if (error) { alert('Billede-upload fejlede: ' + error); return; }
+    const client = DATA.clients.find(c => c.id === clientId);
     if (!client.exercisePhotos) client.exercisePhotos = {};
-    client.exercisePhotos[currentExerciseDetail.libraryId] = dataUrl;
+    client.exercisePhotos[libraryId] = path;
     save();
-    const ex = (DATA.exerciseLibrary || []).find(e => e.id === currentExerciseDetail.libraryId);
+    const ex = (DATA.exerciseLibrary || []).find(e => e.id === libraryId);
     renderExercisePhoto(client, ex);
     showToast('Foto gemt');
   });
