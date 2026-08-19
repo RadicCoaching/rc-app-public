@@ -933,6 +933,11 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       <div id="lib-edit-image-preview" style="margin-bottom:8px"></div>
       <input type="file" accept="image/*" id="lib-edit-image-input" onchange="handleLibraryImageUpload(this)">
     </div>
+    <div class="field">
+      <label>Instruktionsvideo (valgfrit, max 20 sek. — kun ren visning af udførslen)</label>
+      <div id="lib-edit-video-preview" style="margin-bottom:8px"></div>
+      <input type="file" accept="video/*" id="lib-edit-video-input" onchange="handleLibraryVideoUpload(this)">
+    </div>
     <div class="modal-actions">
       <button class="btn btn-danger" id="lib-edit-delete-btn" style="display:none" onclick="deleteLibraryExercise(Number(document.getElementById('lib-edit-id').value))">Slet</button>
       <button class="btn" onclick="closeModal('modal-library-editor')">Annuller</button>
@@ -1099,6 +1104,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       <label>Foto af maskinen på dit center (valgfrit)</label>
       <input type="file" accept="image/*" id="ex-detail-photo-input" onchange="handleExercisePhotoUpload(this)">
     </div>
+    <div id="ex-detail-video-wrap" style="margin-bottom:10px"></div>
     <div id="ex-detail-description" style="font-size:16px;color:var(--gray);line-height:1.6;margin:8px 0 18px"></div>
     <div class="field">
       <label>Dato</label>
@@ -1745,6 +1751,7 @@ async function pushToSupabase() {
     if (DATA.exerciseLibrary.length) {
       await sb.from('exercise_library').upsert(DATA.exerciseLibrary.map(e => ({
         id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', photo_url: e.image || '',
+        video_url: e.video || '',
         show_photo_to_clients: e.showImageToClients !== undefined ? !!e.showImageToClients : true
       })));
     }
@@ -2190,7 +2197,7 @@ async function refreshFromSupabase() {
       // De to platforme har derfor haft hver sin, usynlige kopi af det samme
       // "standardbillede"-koncept. image_url var tom for alle øvelser (0
       // rækker) — ingen data at miste ved at skifte.
-      exerciseLibrary: (libRes.data || []).map(e => ({ id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image: e.photo_url || '', showImageToClients: e.show_photo_to_clients !== undefined ? !!e.show_photo_to_clients : true })),
+      exerciseLibrary: (libRes.data || []).map(e => ({ id: e.id, name: e.name, category: e.category || 'Andet', description: e.description || '', image: e.photo_url || '', video: e.video_url || '', showImageToClients: e.show_photo_to_clients !== undefined ? !!e.show_photo_to_clients : true })),
       programTemplates: (tmplRes.data || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(t => ({ id: t.id, name: t.name, focus: t.focus || '', blocks: t.blocks || [] })),
       clients,
       checkins: (ciRes.data || []).map(ci => ({ id: ci.id, clientId: ci.client_id, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training, comment: ci.comment || '', reply: ci.reply || '', autoReplied: !!ci.auto_replied, fromCoach: !!ci.from_coach, hiddenForCoach: !!ci.hidden_for_coach, hiddenForClient: !!ci.hidden_for_client, snoozedUntil: ci.snoozed_until || null, coachSeen: !!ci.coach_seen })),
@@ -5335,10 +5342,19 @@ function renderExerciseLibrary() {
 }
 
 let libraryEditImageData = null;
+let libraryEditVideoData = null;
+
+// Rune (2026-08-19): "Max 15-20 sek. Det skal ikke være snakke videoer, men
+// rent visning af øvelser" — 20 sek. håndhæves her ved at afvise den
+// VALGTE fil før upload (browseren kan ikke, ligesom rc-mobiles kamera,
+// begrænse en optagelse undervejs — kun tjekke bagefter). Lyd er bevidst
+// IKKE fjernet fra filen ("Jeg vil gerne have lyd på").
+const MAX_EXERCISE_VIDEO_SECONDS = 20;
 
 function openLibraryEditor(id) {
   const ex = id ? DATA.exerciseLibrary.find(e => e.id === id) : null;
   libraryEditImageData = ex ? (ex.image || null) : null;
+  libraryEditVideoData = ex ? (ex.video || null) : null;
   document.getElementById('library-editor-title').textContent = ex ? 'Redigér øvelse' : 'Ny øvelse';
   // Id genereres med det samme, også ved en HELT NY øvelse (ikke først ved
   // Gem) — så et billede kan uploades til Storage under den rigtige sti FØR
@@ -5350,8 +5366,10 @@ function openLibraryEditor(id) {
   catSel.innerHTML = EXERCISE_CATEGORIES.map(c => `<option value="${c}" ${c === currentCat ? 'selected' : ''}>${c}</option>`).join('');
   document.getElementById('lib-edit-desc').value = ex ? (ex.description || '') : '';
   document.getElementById('lib-edit-image-input').value = '';
+  document.getElementById('lib-edit-video-input').value = '';
   document.getElementById('lib-edit-delete-btn').style.display = ex ? 'inline-flex' : 'none';
   renderLibraryImagePreview();
+  renderLibraryVideoPreview();
   document.getElementById('modal-library-editor').classList.add('open');
 }
 
@@ -5375,6 +5393,42 @@ function handleLibraryImageUpload(inputEl) {
     libraryEditImageData = path;
     renderLibraryImagePreview();
   });
+}
+
+async function renderLibraryVideoPreview() {
+  const el = document.getElementById('lib-edit-video-preview');
+  if (!libraryEditVideoData) {
+    el.innerHTML = `<div class="card-sub">Ingen video valgt</div>`;
+    return;
+  }
+  el.innerHTML = `<div style="position:relative;display:inline-block"><video id="lib-edit-video-preview-vid" controls style="width:220px;max-height:180px;border-radius:var(--radius-sm);border:1px solid var(--border)"></video><button class="btn btn-sm btn-danger" style="position:absolute;top:-8px;right:-8px;padding:2px 8px" onclick="libraryEditVideoData=null;renderLibraryVideoPreview()">✕</button></div>`;
+  const vidEl = document.getElementById('lib-edit-video-preview-vid');
+  const url = isExerciseMediaStoragePath(libraryEditVideoData) ? await resolveExerciseMediaUrl('exercise-videos', libraryEditVideoData) : libraryEditVideoData;
+  if (url) vidEl.src = url;
+}
+
+function handleLibraryVideoUpload(inputEl) {
+  const file = inputEl.files[0];
+  if (!file) return;
+  const libraryId = document.getElementById('lib-edit-id').value;
+  // Tjekker varigheden FØR upload — en <video>-forhåndsvisning skal loade
+  // metadata for at kende .duration, kan ikke afgøres af selve File-objektet.
+  const probeUrl = URL.createObjectURL(file);
+  const probe = document.createElement('video');
+  probe.preload = 'metadata';
+  probe.onloadedmetadata = async () => {
+    URL.revokeObjectURL(probeUrl);
+    if (probe.duration > MAX_EXERCISE_VIDEO_SECONDS) {
+      alert(`Videoen er for lang — max ${MAX_EXERCISE_VIDEO_SECONDS} sekunder, denne er ${Math.round(probe.duration)} sek. Klip den til og prøv igen.`);
+      inputEl.value = '';
+      return;
+    }
+    const { path, error } = await uploadExerciseMedia('library-video', { libraryId }, file);
+    if (error) { alert('Video-upload fejlede: ' + error); return; }
+    libraryEditVideoData = path;
+    renderLibraryVideoPreview();
+  };
+  probe.src = probeUrl;
 }
 
 // Downscales + compresses an uploaded image via canvas before storing as base64,
@@ -5432,7 +5486,14 @@ function isExerciseMediaStoragePath(value) {
 
 async function resolveExerciseMediaUrl(bucket, path) {
   const { data, error } = await sb.functions.invoke('exercise-media-urls', { body: { action: 'view', bucket, path } });
-  if (error || !data || data.error) return null;
+  if (error) {
+    console.error('exercise-media-urls (view) fejlede for', path, '—', error, error && error.context && await error.context.text().catch(() => null));
+    return null;
+  }
+  if (!data || data.error) {
+    console.error('exercise-media-urls (view) returnerede en fejl for', path, '—', data && data.error);
+    return null;
+  }
   return data.signedUrl || null;
 }
 
@@ -5459,7 +5520,15 @@ function setResolvableImgSrc(imgEl, value, bucket) {
     return;
   }
   resolveExerciseMediaUrl(bucket, value).then(url => {
-    if (url) imgEl.src = url;
+    if (url) {
+      imgEl.src = url;
+    } else {
+      // Fejlen er allerede logget i resolveExerciseMediaUrl() — visuelt
+      // markeret her, så en tom kasse ikke er umulig at skelne fra "intet
+      // billede sat" i selve appen (kun synligt i konsollen ellers).
+      imgEl.style.opacity = '0.3';
+      imgEl.title = 'Kunne ikke hente billedet — se browser-konsollen';
+    }
   });
 }
 
@@ -5479,8 +5548,9 @@ function saveLibraryExercise() {
     ex.category = category;
     ex.description = description;
     ex.image = libraryEditImageData || '';
+    ex.video = libraryEditVideoData || '';
   } else {
-    DATA.exerciseLibrary.push({ id: idVal, name, category, description, image: libraryEditImageData || '' });
+    DATA.exerciseLibrary.push({ id: idVal, name, category, description, image: libraryEditImageData || '', video: libraryEditVideoData || '' });
   }
   save();
   closeModal('modal-library-editor');
@@ -7100,6 +7170,7 @@ function openExerciseDetail(programId, libraryId, clientId) {
   document.getElementById('ex-detail-description').textContent = ex && ex.description ? ex.description : 'Ingen beskrivelse endnu.';
   document.getElementById('ex-detail-photo-input').value = '';
   renderExercisePhoto(client, ex);
+  renderExerciseVideo(ex);
   const lastRaw = latestWeightFor(program, libraryId);
   const parsed = parseWeightEntry(lastRaw);
   exSetWeightMode(parsed.mode);
@@ -7132,6 +7203,26 @@ async function renderExercisePhoto(client, ex) {
     return;
   }
   wrap.innerHTML = `<img src="${img}" style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:pointer" onclick="openPhotoViewer('${img.replace(/'/g, "\\'")}')">`;
+}
+
+// Instruktionsvideo — sat fra Kartoteket, samme "Vis for klienter"-styring
+// som standardbilledet (ingen separat video-synligheds-knap). Coachen ser
+// den altid; klienten kun når ex.showImageToClients ikke er false.
+async function renderExerciseVideo(ex) {
+  const wrap = document.getElementById('ex-detail-video-wrap');
+  const masterAllowed = currentUser === 'coach' || (ex && ex.showImageToClients !== false);
+  const rawVideo = (masterAllowed && ex && ex.video) || '';
+  if (!rawVideo) {
+    wrap.innerHTML = '';
+    return;
+  }
+  wrap.innerHTML = `<div class="card-sub" style="padding:8px 0">Henter video…</div>`;
+  const url = isExerciseMediaStoragePath(rawVideo) ? await resolveExerciseMediaUrl('exercise-videos', rawVideo) : rawVideo;
+  if (!url) {
+    wrap.innerHTML = `<div class="card-sub" style="padding:8px 0">Kunne ikke hente videoen</div>`;
+    return;
+  }
+  wrap.innerHTML = `<div class="card-sub" style="margin-bottom:6px">Sådan udføres øvelsen</div><video src="${url}" controls style="width:100%;max-height:260px;border-radius:var(--radius-sm);border:1px solid var(--border)"></video>`;
 }
 
 function handleExercisePhotoUpload(inputEl) {
