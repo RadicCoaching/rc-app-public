@@ -5680,6 +5680,7 @@ function coachProgressSubtab(tab) {
   if (tab === 'bmi') renderProgressBMI(currentClientId, 'coach-progress-bmi-panel', true);
   if (tab === 'velvaere') renderProgressVelvaere(currentClientId, 'coach-progress-velvaere-panel');
   if (tab === 'oevelser') renderProgressOevelser(currentClientId, 'coach-progress-oevelser-panel');
+  if (tab === 'sleep') renderProgressSleep(currentClientId, 'coach-progress-sleep-panel');
 }
 
 function renderDetailHistory(clientId) {
@@ -7821,6 +7822,25 @@ function renderProgressVelvaere(clientId, panelId) {
     { label: 'Energi', color: CHART_COLORS.accent, points: cis.filter(c => c.energy != null).map(c => ({ date: c.date, value: c.energy })) },
     { label: 'Søvn', color: CHART_COLORS.blue, points: cis.filter(c => c.sleep != null).map(c => ({ date: c.date, value: c.sleep })) },
     { label: 'Træning', color: CHART_COLORS.good, points: cis.filter(c => c.training != null).map(c => ({ date: c.date, value: c.training })) },
+  ];
+  el.innerHTML = `<div class="card">${svgMultiLineChart(series, { min: 1, max: 5 })}</div>
+    <div class="card-sub" style="margin-top:8px;text-align:center">Skala 1–5 · ${cis.length} check-ins</div>`;
+}
+
+// Rune: "Hullet i søvn registreringer? Hvad er det?" — "Søvn"-fanens knap
+// fandtes allerede (se coachProgressSubtab), men uden noget render-kald
+// bag den, så panelet altid var tomt. Data eksisterede hele tiden (samme
+// ci.sleep som indgår i Velvære-grafen ovenfor) — kun den isolerede,
+// egne visning manglede.
+function renderProgressSleep(clientId, panelId) {
+  const el = document.getElementById(panelId);
+  const cis = DATA.checkins.filter(c => c.clientId === clientId && c.sleep != null).sort((a,b) => a.date.localeCompare(b.date));
+  if (!cis.length) {
+    el.innerHTML = '<div class="empty"><span class="empty-icon">😴</span><p>Ingen søvn-registreringer endnu</p></div>';
+    return;
+  }
+  const series = [
+    { label: 'Søvn', color: CHART_COLORS.blue, points: cis.map(c => ({ date: c.date, value: c.sleep })) },
   ];
   el.innerHTML = `<div class="card">${svgMultiLineChart(series, { min: 1, max: 5 })}</div>
     <div class="card-sub" style="margin-top:8px;text-align:center">Skala 1–5 · ${cis.length} check-ins</div>`;
