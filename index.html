@@ -6415,7 +6415,7 @@ function renderDetailSettings(clientId) {
   const bodyMetricsSorted = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId).sort((a, b) => a.date.localeCompare(b.date));
   const weightMetricsSorted = bodyMetricsSorted.filter(m => m.weight != null);
   const latestWeight = weightMetricsSorted.length ? weightMetricsSorted[weightMetricsSorted.length - 1].weight : null;
-  const stepsInfo = averageDailySteps(bodyMetricsSorted);
+  const stepsInfo = latestStepsAverage(bodyMetricsSorted);
   const tanitaScansForBmr = getTanitaScansForClient(clientId, () => renderDetailSettings(clientId));
   const { bmr, usedTanita: bmrUsedTanita } = computeBMRAuto(client, latestWeight, latestTanitaBodyFatPercent(tanitaScansForBmr));
   const currentPalInfo = palInfo(client.pal);
@@ -6445,7 +6445,7 @@ function renderDetailSettings(clientId) {
           </div>`
       }
       ${stepsInfo ? `<div class="card-sub" style="background:var(--bg2);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px">
-        🚶 Gennemsnit <strong>${stepsInfo.avgSteps.toLocaleString('da-DK')}</strong> skridt/dag (sidste ${stepsInfo.dayCount} ${stepsInfo.dayCount === 1 ? 'dag' : 'dage'} med registrering)
+        🚶 <strong>${stepsInfo.avgSteps.toLocaleString('da-DK')}</strong> skridt/dag i snit (klientens eget tal, opdateret ${stepsInfo.date})
         <div style="font-style:italic;margin-top:4px;font-size:11px">Ekstra kontekst til PAL — ikke regnet ind i forslaget nedenfor, kun trænings-frekvens gør det endnu.</div>
       </div>` : ''}
       ${(() => {
@@ -7522,7 +7522,8 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
       <div class="card-title" style="margin-bottom:12px">Log ny måling</div>
       <div class="field"><label>Dato</label><input type="date" id="bm-date-${panelId}" value="${new Date().toISOString().split('T')[0]}"></div>
       <div class="field"><label>Vægt (kg)</label><input type="number" step="0.1" inputmode="decimal" id="bm-weight-${panelId}" placeholder="fx 78.5"></div>
-      <div class="field"><label>Skridt i dag (valgfrit)</label><input type="number" step="1" inputmode="numeric" id="bm-steps-${panelId}" placeholder="fx 8200"></div>
+      <div class="field"><label>Gennemsnitligt skridt/dag (seneste uge, ca. — valgfrit)</label><input type="number" step="1" inputmode="numeric" id="bm-steps-${panelId}" placeholder="fx 8200"></div>
+      <div class="card-sub" style="margin:-8px 0 12px">Kig i din telefons egen skridttæller — ikke noget du skal opdatere hver dag.</div>
       <div class="field"><label>Højde (cm)</label><input type="number" step="1" inputmode="decimal" id="bm-height-${panelId}" value="${client.heightCm || ''}" placeholder="fx 172"></div>
       <div class="field"><label>Fødselsår</label><input type="number" step="1" inputmode="numeric" id="bm-birthyear-${panelId}" value="${client.birthYear || ''}" placeholder="fx 1988"></div>
       <div class="field-row" style="display:flex;gap:10px">
@@ -7707,20 +7708,23 @@ function suggestPalFromTrainingFrequency(trainingDates, windowDays) {
   return { value: tier.value, label: tier.label, weeklyAvg: weeklyAvg, sessionCount: recentCount, windowDays: windowDays };
 }
 
-// Auto-PAL/kcal, Fase 2 (arbejdsdokument): dagligt skridt-inputfelt.
-// Gennemsnitligt dagligt skridtantal vises som EKSTRA KONTEKST ved siden af
-// trænings-frekvens-forslaget ovenfor — regnes bevidst IKKE automatisk ind i
-// selve PAL-tallet endnu (det er den tungere Fase 3). Samme logik som
-// rc-mobiles src/lib/autoPal.ts::averageDailySteps().
-function averageDailySteps(entries, windowDays) {
-  windowDays = windowDays || 14;
+const STEPS_STALE_AFTER_DAYS = 30;
+
+// Auto-PAL/kcal, Fase 2 (arbejdsdokument): skridt-inputfelt. Rune: "man bare
+// taster et gennemsnits skridt antal ind for nu (de fleste kan se en uge
+// tilbage), så man ikke skal taste hver dag" — klienten indtaster selv et
+// allerede-udregnet ugentligt gennemsnit, ikke et rå dagligt tal. Derfor
+// vises kun det SENESTE indtastede tal, ikke et gennemsnit-af-gennemsnit.
+// Regnes bevidst IKKE automatisk ind i selve PAL-tallet endnu (det er den
+// tungere Fase 3). Samme logik som rc-mobiles src/lib/autoPal.ts::
+// latestStepsAverage().
+function latestStepsAverage(entries) {
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - windowDays);
+  cutoff.setDate(cutoff.getDate() - STEPS_STALE_AFTER_DAYS);
   const cutoffStr = cutoff.toISOString().split('T')[0];
-  const recent = entries.filter(e => e.date >= cutoffStr && e.steps != null && e.steps >= 0);
-  if (!recent.length) return null;
-  const total = recent.reduce((sum, e) => sum + e.steps, 0);
-  return { avgSteps: Math.round(total / recent.length), dayCount: recent.length };
+  const withSteps = entries.filter(e => e.steps != null && e.steps >= 0 && e.date >= cutoffStr).sort((a, b) => b.date.localeCompare(a.date));
+  if (!withSteps.length) return null;
+  return { avgSteps: withSteps[0].steps, date: withSteps[0].date };
 }
 
 function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent) {
