@@ -1778,6 +1778,7 @@ async function pushToSupabase() {
         // engangskode-migrering foretaget fra en anden enhed i mellemtiden.
         id: c.id, name: c.name, height_cm: c.heightCm, birth_year: c.birthYear,
         birth_month: c.birthMonth || null, birth_day: c.birthDay || null, sex: c.sex, pal: c.pal,
+        weight_goal: c.weightGoal || null,
         show_weight: !!(c.visibleStats && c.visibleStats.weight),
         show_bmi: !!(c.visibleStats && c.visibleStats.bmi),
         show_bmr: !!(c.visibleStats && c.visibleStats.bmr),
@@ -2173,6 +2174,7 @@ async function refreshFromSupabase() {
     const clients = clientsRes.data.map(c => ({
       id: c.id, name: c.name, pin: c.pin, codeHash: c.code_hash, setupCode: c.setup_code, heightCm: c.height_cm, birthYear: c.birth_year,
       birthMonth: c.birth_month || null, birthDay: c.birth_day || null, sex: c.sex, pal: c.pal,
+      weightGoal: c.weight_goal || null,
       visibleStats: { weight: !!c.show_weight, bmi: !!c.show_bmi, bmr: !!c.show_bmr, kcal: !!c.show_kcal, sessionsLeft: !!c.show_sessions_left, distanceKm: !!c.show_distance_km },
       trainingGoals: c.training_goals || [], showTrainingGoal: !!c.show_training_goal,
       trainingPause: c.training_pause || null, celebrated: c.celebrated || {}, coachNotifiedGoals: c.coach_notified_goals || {},
@@ -6419,6 +6421,11 @@ function renderDetailSettings(clientId) {
   const tanitaScansForBmr = getTanitaScansForClient(clientId, () => renderDetailSettings(clientId));
   const { bmr, usedTanita: bmrUsedTanita } = computeBMRAuto(client, latestWeight, latestTanitaBodyFatPercent(tanitaScansForBmr));
   const currentPalInfo = palInfo(client.pal);
+  const weightTrend = computeWeightTrend(bodyMetricsSorted);
+  const weightGoalSuggestion = suggestPalFromWeightGoal(client.weightGoal, bodyMetricsSorted, bmr, client.pal);
+  const weightGoalOptions = Object.keys(WEIGHT_GOALS).map(key =>
+    `<option value="${key}" ${client.weightGoal === key ? 'selected' : ''}>${WEIGHT_GOALS[key].label}</option>`
+  ).join('');
   document.getElementById('detail-settings').innerHTML = `
     <div class="field"><label>Navn</label><input type="text" id="set-name-${clientId}" value="${client.name}"></div>
     <div class="field"><label>Login-kode</label>${loginCodeStatusHtml(client)}</div>
@@ -6470,6 +6477,23 @@ function renderDetailSettings(clientId) {
         ${palOptions}
       </select>
     </div>
+    <div class="field"><label>Vægtmål (sæt sammen med klienten)</label>
+      <select id="set-weightgoal-${clientId}">
+        <option value="" ${!client.weightGoal ? 'selected' : ''}>Intet mål sat</option>
+        ${weightGoalOptions}
+      </select>
+    </div>
+    ${weightTrend ? `<div class="card-sub" style="background:var(--bg2);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px">
+      📉 Faktisk vægtudvikling: <strong>${weightTrend.kgPerWeek >= 0 ? '+' : ''}${weightTrend.kgPerWeek.toFixed(2).replace('.', ',')} kg/uge</strong>
+      (seneste ${weightTrend.windowDays} dage, ${weightTrend.pointCount} målinger)
+    </div>` : ''}
+    ${weightGoalSuggestion ? `<div class="card-sub" style="background:var(--bg2);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;cursor:pointer" onclick="document.getElementById('set-pal-${clientId}').value='${weightGoalSuggestion.suggestedPal}'">
+      Forslag: <strong>${escapeHtml(weightGoalSuggestion.suggestedLabel)}</strong> — vægten udvikler sig
+      ${weightGoalSuggestion.actualKgPerWeek.toFixed(2).replace('.', ',')} kg/uge, men målet
+      ("${escapeHtml(weightGoalSuggestion.goalLabel)}") lægger op til ${weightGoalSuggestion.expectedKgPerWeek.toFixed(2).replace('.', ',')} kg/uge.
+      <div style="font-style:italic;margin-top:6px;font-size:11px">Vægt-baseret, uden kendskab til kalorieindtag — kun et forslag, ikke en præcis beregning.</div>
+      <div style="margin-top:6px">— tryk for at bruge</div>
+    </div>` : ''}
     <div class="field"><label>Autosvar (når du er offline)</label><textarea id="set-auto-${clientId}">${client.autoReply || DATA.coachStatus.offlineMsg}</textarea></div>
     <button class="btn btn-primary btn-block" onclick="saveClientSettings(${clientId})">Gem</button>
     <div class="divider"></div>
@@ -6582,6 +6606,7 @@ function saveClientSettings(clientId) {
   client.sex = document.getElementById('set-sex-' + clientId).value || null;
   const palVal = document.getElementById('set-pal-' + clientId).value;
   client.pal = palVal ? parseFloat(palVal) : null;
+  client.weightGoal = document.getElementById('set-weightgoal-' + clientId).value || null;
   client.autoReply = document.getElementById('set-auto-' + clientId).value.trim();
   save();
   document.getElementById('detail-client-name').textContent = client.name;
@@ -7725,6 +7750,84 @@ function latestStepsAverage(entries) {
   const withSteps = entries.filter(e => e.steps != null && e.steps >= 0 && e.date >= cutoffStr).sort((a, b) => b.date.localeCompare(a.date));
   if (!withSteps.length) return null;
   return { avgSteps: withSteps[0].steps, date: withSteps[0].date };
+}
+
+// Auto-PAL/kcal, Fase 3 (arbejdsdokument): vægt-baseret PAL-justering — UDEN
+// kalorie-tracking. Rune: "Der skal IKKE bygges kalorie tracking, det er PT
+// imod mine principper og tanker... jeg vil hellere sammen med klienten
+// sætte et mål." Genbruger de samme kategorier som allerede vises på
+// TDEE-kortet (renderBMRTDEECard) — coachen sætter IKKE et rå kg/uge-tal,
+// kun én af disse fire, velkendte kategorier. Samme logik som rc-mobiles
+// src/lib/autoPal.ts.
+const KCAL_PER_KG_BODYWEIGHT = 7700;
+
+const WEIGHT_GOALS = {
+  maintain: { label: 'Vedligehold', kcalPerDay: 0 },
+  slow_loss: { label: 'Langsomt tab (~0,3 kg/uge)', kcalPerDay: -350 },
+  mod_loss: { label: 'Moderat tab (~0,5 kg/uge)', kcalPerDay: -500 },
+  slow_gain: { label: 'Langsom opbygning (~0,2 kg/uge)', kcalPerDay: 250 },
+};
+
+function expectedKgPerWeek(goal) {
+  return (WEIGHT_GOALS[goal].kcalPerDay * 7) / KCAL_PER_KG_BODYWEIGHT;
+}
+
+const WEIGHT_TREND_WINDOW_DAYS = 21;
+const MIN_MEANINGFUL_DEVIATION_KG_PER_WEEK = 0.15;
+
+// Simpel lineær regression (mindste kvadraters metode) af vægt over tid —
+// mere robust mod enkeltdages udsving end bare "første vs. seneste måling".
+function computeWeightTrend(entries, windowDays) {
+  windowDays = windowDays || WEIGHT_TREND_WINDOW_DAYS;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - windowDays);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+  const points = entries
+    .filter(e => e.weight != null && e.date >= cutoffStr)
+    .map(e => ({ t: new Date(e.date).getTime() / 86400000, w: e.weight }))
+    .sort((a, b) => a.t - b.t);
+  if (points.length < 2) return null;
+
+  const n = points.length;
+  const meanT = points.reduce((s, p) => s + p.t, 0) / n;
+  const meanW = points.reduce((s, p) => s + p.w, 0) / n;
+  const num = points.reduce((s, p) => s + (p.t - meanT) * (p.w - meanW), 0);
+  const den = points.reduce((s, p) => s + (p.t - meanT) ** 2, 0);
+  if (den === 0) return null;
+  const kgPerDay = num / den;
+  return { kgPerWeek: kgPerDay * 7, pointCount: n, windowDays: windowDays };
+}
+
+// Sammenligner klientens faktiske, målte vægtudvikling med den rate det
+// valgte mål indebærer — foreslår kun en PAL-justering ved en reel
+// afvigelse, snappet til nærmeste eksisterende PAL-niveau.
+function suggestPalFromWeightGoal(weightGoal, weightEntries, bmr, currentPal) {
+  if (!weightGoal || !bmr || !currentPal) return null;
+  const trend = computeWeightTrend(weightEntries);
+  if (!trend) return null;
+
+  const expected = expectedKgPerWeek(weightGoal);
+  const deviation = trend.kgPerWeek - expected;
+  if (Math.abs(deviation) < MIN_MEANINGFUL_DEVIATION_KG_PER_WEEK) return null;
+
+  const weeklyKcalCorrection = -deviation * KCAL_PER_KG_BODYWEIGHT;
+  const currentTdee = bmr * currentPal;
+  const targetTdee = currentTdee + weeklyKcalCorrection / 7;
+  const rawPal = targetTdee / bmr;
+
+  const clamped = Math.min(Math.max(rawPal, PAL_LEVELS[0].value), PAL_LEVELS[PAL_LEVELS.length - 1].value);
+  const nearest = PAL_LEVELS.reduce((best, p) => Math.abs(p.value - clamped) < Math.abs(best.value - clamped) ? p : best);
+  if (nearest.value === currentPal) return null;
+
+  return {
+    suggestedPal: nearest.value,
+    suggestedLabel: nearest.label,
+    actualKgPerWeek: trend.kgPerWeek,
+    expectedKgPerWeek: expected,
+    goalLabel: WEIGHT_GOALS[weightGoal].label,
+    pointCount: trend.pointCount,
+    windowDays: trend.windowDays,
+  };
 }
 
 function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent) {
