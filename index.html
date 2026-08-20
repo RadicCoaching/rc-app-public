@@ -1886,7 +1886,7 @@ async function pushToSupabase() {
   // Kropsmålinger og check-ins — rene tilføjelser, upsert er nok
   await section('body_metrics', async () => {
     if (DATA.bodyMetrics && DATA.bodyMetrics.length) {
-      await sb.from('body_metrics').upsert(DATA.bodyMetrics.map(m => ({ id: m.id, client_id: m.clientId, date: m.date, weight: m.weight })));
+      await sb.from('body_metrics').upsert(DATA.bodyMetrics.map(m => ({ id: m.id, client_id: m.clientId, date: m.date, weight: m.weight, steps: m.steps ?? null })));
     }
   });
   // run_logs og training_checkins — klienten må gerne rette i sine EGNE allerede
@@ -2210,7 +2210,7 @@ async function refreshFromSupabase() {
       clients,
       checkins: (ciRes.data || []).map(ci => ({ id: ci.id, clientId: ci.client_id, date: ci.date, energy: ci.energy, sleep: ci.sleep, training: ci.training, comment: ci.comment || '', reply: ci.reply || '', autoReplied: !!ci.auto_replied, fromCoach: !!ci.from_coach, hiddenForCoach: !!ci.hidden_for_coach, hiddenForClient: !!ci.hidden_for_client, snoozedUntil: ci.snoozed_until || null, coachSeen: !!ci.coach_seen })),
       appointments: (aptRes.data || []).map(a => ({ id: a.id, clientId: a.client_id, date: a.date, time: a.time || '', title: a.title, coachOnly: !!a.coach_only, durationMin: a.duration_min || 60, location: a.location || '' })),
-      bodyMetrics: (bmRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, weight: m.weight })),
+      bodyMetrics: (bmRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, weight: m.weight, steps: m.steps })),
       runLogs: (rlRes.data || []).map(r => ({ id: r.id, clientId: r.client_id, date: r.date, distanceKm: r.distance_km, durationSec: r.duration_sec, note: r.note || '', interval: r.interval_data || null, type: r.type || 'Løb' })),
       trainingCheckins: (tcRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo: t.photo_url || '', runLogId: t.run_log_id || null, coachSeen: !!t.coach_seen, snoozedUntil: t.snoozed_until || null, reply: t.reply || '' })),
       mealLogs: (mlRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, time: m.time || '', mealType: m.meal_type, note: m.note || '', photo: m.photo_url || '' })),
@@ -6413,7 +6413,9 @@ function renderDetailSettings(clientId) {
   // afgjort af ens størrelse osv som danner rammen for ens BMR som man
   // ganger op med PAL?" — BMR/TDEE vist lige ved PAL-feltet.
   const bodyMetricsSorted = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId).sort((a, b) => a.date.localeCompare(b.date));
-  const latestWeight = bodyMetricsSorted.length ? bodyMetricsSorted[bodyMetricsSorted.length - 1].weight : null;
+  const weightMetricsSorted = bodyMetricsSorted.filter(m => m.weight != null);
+  const latestWeight = weightMetricsSorted.length ? weightMetricsSorted[weightMetricsSorted.length - 1].weight : null;
+  const stepsInfo = averageDailySteps(bodyMetricsSorted);
   const tanitaScansForBmr = getTanitaScansForClient(clientId, () => renderDetailSettings(clientId));
   const { bmr, usedTanita: bmrUsedTanita } = computeBMRAuto(client, latestWeight, latestTanitaBodyFatPercent(tanitaScansForBmr));
   const currentPalInfo = palInfo(client.pal);
@@ -6442,6 +6444,10 @@ function renderDetailSettings(clientId) {
             ${currentPalInfo ? `<br>Nuværende TDEE (${escapeHtml(currentPalInfo.label)}, PAL ${currentPalInfo.value}): <strong>${Math.round(bmr * currentPalInfo.value)}</strong> kcal/dag` : ''}
           </div>`
       }
+      ${stepsInfo ? `<div class="card-sub" style="background:var(--bg2);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px">
+        🚶 Gennemsnit <strong>${stepsInfo.avgSteps.toLocaleString('da-DK')}</strong> skridt/dag (sidste ${stepsInfo.dayCount} ${stepsInfo.dayCount === 1 ? 'dag' : 'dage'} med registrering)
+        <div style="font-style:italic;margin-top:4px;font-size:11px">Ekstra kontekst til PAL — ikke regnet ind i forslaget nedenfor, kun trænings-frekvens gør det endnu.</div>
+      </div>` : ''}
       ${(() => {
         const trainingDates = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId).map(t => t.date);
         const suggestion = suggestPalFromTrainingFrequency(trainingDates);
@@ -7146,7 +7152,7 @@ function parseWeightEntry(raw) {
 }
 
 function getLatestBodyWeight(clientId) {
-  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId);
+  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId && m.weight != null);
   if (!entries.length) return null;
   return entries.slice().sort((a,b) => a.date.localeCompare(b.date)).pop().weight;
 }
@@ -7506,7 +7512,7 @@ function extractTanitaValueSeries(tanitaScans) {
 function renderProgressKrop(clientId, panelId, showForm, stats) {
   const client = DATA.clients.find(c => c.id === clientId);
   const el = document.getElementById(panelId);
-  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId).sort((a,b) => a.date.localeCompare(b.date));
+  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId && m.weight != null).sort((a,b) => a.date.localeCompare(b.date));
   stats = stats || { weight: false, bmi: false, bmr: false, kcal: false };
   const tanitaScans = getTanitaScansForClient(clientId, () => renderProgressKrop(clientId, panelId, showForm, stats));
 
@@ -7516,6 +7522,7 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
       <div class="card-title" style="margin-bottom:12px">Log ny måling</div>
       <div class="field"><label>Dato</label><input type="date" id="bm-date-${panelId}" value="${new Date().toISOString().split('T')[0]}"></div>
       <div class="field"><label>Vægt (kg)</label><input type="number" step="0.1" inputmode="decimal" id="bm-weight-${panelId}" placeholder="fx 78.5"></div>
+      <div class="field"><label>Skridt i dag (valgfrit)</label><input type="number" step="1" inputmode="numeric" id="bm-steps-${panelId}" placeholder="fx 8200"></div>
       <div class="field"><label>Højde (cm)</label><input type="number" step="1" inputmode="decimal" id="bm-height-${panelId}" value="${client.heightCm || ''}" placeholder="fx 172"></div>
       <div class="field"><label>Fødselsår</label><input type="number" step="1" inputmode="numeric" id="bm-birthyear-${panelId}" value="${client.birthYear || ''}" placeholder="fx 1988"></div>
       <div class="field-row" style="display:flex;gap:10px">
@@ -7616,7 +7623,7 @@ function renderProgressBMI(clientId, panelId, visibleToClient) {
     return;
   }
 
-  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId).sort((a,b) => a.date.localeCompare(b.date));
+  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId && m.weight != null).sort((a,b) => a.date.localeCompare(b.date));
   if (!entries.length) {
     el.innerHTML = `<div class="empty"><span class="empty-icon">📈</span><p>Ingen vægt-målinger endnu — BMI vises automatisk her, så snart der er logget mindst én.</p></div>`;
     return;
@@ -7700,6 +7707,22 @@ function suggestPalFromTrainingFrequency(trainingDates, windowDays) {
   return { value: tier.value, label: tier.label, weeklyAvg: weeklyAvg, sessionCount: recentCount, windowDays: windowDays };
 }
 
+// Auto-PAL/kcal, Fase 2 (arbejdsdokument): dagligt skridt-inputfelt.
+// Gennemsnitligt dagligt skridtantal vises som EKSTRA KONTEKST ved siden af
+// trænings-frekvens-forslaget ovenfor — regnes bevidst IKKE automatisk ind i
+// selve PAL-tallet endnu (det er den tungere Fase 3). Samme logik som
+// rc-mobiles src/lib/autoPal.ts::averageDailySteps().
+function averageDailySteps(entries, windowDays) {
+  windowDays = windowDays || 14;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - windowDays);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+  const recent = entries.filter(e => e.date >= cutoffStr && e.steps != null && e.steps >= 0);
+  if (!recent.length) return null;
+  const total = recent.reduce((sum, e) => sum + e.steps, 0);
+  return { avgSteps: Math.round(total / recent.length), dayCount: recent.length };
+}
+
 function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent) {
   const { bmr, usedTanita } = computeBMRAuto(client, weight, bodyFatPercent || null);
   let html = '';
@@ -7778,7 +7801,10 @@ function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent) {
 }
 
 function saveBodyMetric(clientId, panelId) {
-  const weightVal = parseFloat(document.getElementById('bm-weight-' + panelId).value);
+  const weightRaw = document.getElementById('bm-weight-' + panelId).value;
+  const stepsRaw = document.getElementById('bm-steps-' + panelId).value;
+  const weightVal = weightRaw !== '' ? parseFloat(weightRaw) : null;
+  const stepsVal = stepsRaw !== '' ? Math.round(parseFloat(stepsRaw)) : null;
   const heightRaw = document.getElementById('bm-height-' + panelId).value;
   const birthYearRaw = document.getElementById('bm-birthyear-' + panelId).value;
   const birthDayRaw = document.getElementById('bm-birthday-' + panelId).value;
@@ -7786,7 +7812,7 @@ function saveBodyMetric(clientId, panelId) {
   const sexRaw = document.getElementById('bm-sex-' + panelId).value;
   const dateEl = document.getElementById('bm-date-' + panelId);
   const chosenDate = (dateEl && dateEl.value) || new Date().toISOString().split('T')[0];
-  if (!weightVal) { alert('Indtast en vægt'); return; }
+  if (weightVal == null && stepsVal == null) { alert('Indtast mindst vægt eller skridt'); return; }
   const client = DATA.clients.find(c => c.id === clientId);
   if (heightRaw !== '') client.heightCm = parseFloat(heightRaw);
   if (birthYearRaw !== '') client.birthYear = parseInt(birthYearRaw, 10);
@@ -7796,9 +7822,10 @@ function saveBodyMetric(clientId, panelId) {
   if (!DATA.bodyMetrics) DATA.bodyMetrics = [];
   const existing = DATA.bodyMetrics.find(m => m.clientId === clientId && m.date === chosenDate);
   if (existing) {
-    existing.weight = weightVal;
+    if (weightVal != null) existing.weight = weightVal;
+    if (stepsVal != null) existing.steps = stepsVal;
   } else {
-    DATA.bodyMetrics.push({ id: Date.now(), clientId, date: chosenDate, weight: weightVal });
+    DATA.bodyMetrics.push({ id: Date.now(), clientId, date: chosenDate, weight: weightVal, steps: stepsVal });
   }
   DATA.bodyMetrics.sort((a, b) => a.date.localeCompare(b.date));
   save();
@@ -8000,7 +8027,7 @@ function fmtDuration(totalSec) {
 }
 
 function latestClientWeight(clientId) {
-  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId).sort((a,b) => a.date.localeCompare(b.date));
+  const entries = (DATA.bodyMetrics || []).filter(m => m.clientId === clientId && m.weight != null).sort((a,b) => a.date.localeCompare(b.date));
   return entries.length ? entries[entries.length - 1].weight : null;
 }
 
