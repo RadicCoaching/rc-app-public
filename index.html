@@ -51,15 +51,6 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 #screen-login{align-items:center;justify-content:center;padding:40px 24px}
 .login-logo{font-family:'Inter',sans-serif;font-weight:900;font-size:72px;color:var(--accent);letter-spacing:-3px;line-height:1;margin-bottom:6px}
 .login-sub{font-size:13px;color:var(--gray);text-transform:uppercase;letter-spacing:.1em;margin-bottom:48px}
-.pin-display{display:flex;gap:12px;margin-bottom:32px;justify-content:center}
-.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);transition:all .15s}
-.pin-dot.filled{background:var(--accent);border-color:var(--accent)}
-.pin-dot.error{background:var(--danger);border-color:var(--danger)}
-.numpad{display:grid;grid-template-columns:repeat(3,72px);gap:12px;justify-content:center}
-.numpad-btn{height:72px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--white);font-family:'Inter',sans-serif;font-weight:700;font-size:28px;letter-spacing:-.01em;cursor:pointer;transition:all .1s;display:flex;align-items:center;justify-content:center}
-.numpad-btn:active{background:var(--accent);color:var(--black);transform:scale(.94)}
-.numpad-btn.del{font-size:18px;color:var(--gray)}
-.numpad-btn.empty{background:transparent;border-color:transparent;pointer-events:none}
 .pin-label{font-size:13px;color:var(--gray);text-align:center;margin-bottom:24px}
 .pin-error{font-size:13px;color:var(--danger);text-align:center;margin-top:12px;min-height:20px}
 
@@ -277,31 +268,31 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 <div id="screen-login" class="screen active">
   <div class="login-logo">RC.</div>
   <div class="login-sub">Radich Coaching</div>
-  <div class="pin-label" id="pin-label">Indtast din PIN</div>
-  <div class="pin-display" id="pin-display">
-    <div class="pin-dot" id="pd0"></div>
-    <div class="pin-dot" id="pd1"></div>
-    <div class="pin-dot" id="pd2"></div>
-    <div class="pin-dot" id="pd3"></div>
-    <div class="pin-dot" id="pd4"></div>
-    <div class="pin-dot" id="pd5"></div>
+
+  <div id="login-step-code">
+    <div class="pin-label" id="pin-label">Indtast din kode</div>
+    <div class="field" style="width:240px">
+      <input type="password" id="login-code-input" autocomplete="off" autocapitalize="off" autocorrect="off"
+        style="text-align:center;font-size:18px" placeholder="Kode" onkeydown="if(event.key==='Enter')tryLogin()">
+    </div>
+    <div class="pin-error" id="pin-error"></div>
+    <button class="btn btn-primary btn-block" onclick="tryLogin()">Log ind</button>
+    <button id="biometric-login-btn" class="btn" style="display:none;margin-top:16px" onclick="attemptBiometricLogin()">🔓 Log ind med Face ID / fingeraftryk</button>
   </div>
-  <div class="numpad">
-    <button class="numpad-btn" onclick="pinPress(1)">1</button>
-    <button class="numpad-btn" onclick="pinPress(2)">2</button>
-    <button class="numpad-btn" onclick="pinPress(3)">3</button>
-    <button class="numpad-btn" onclick="pinPress(4)">4</button>
-    <button class="numpad-btn" onclick="pinPress(5)">5</button>
-    <button class="numpad-btn" onclick="pinPress(6)">6</button>
-    <button class="numpad-btn" onclick="pinPress(7)">7</button>
-    <button class="numpad-btn" onclick="pinPress(8)">8</button>
-    <button class="numpad-btn" onclick="pinPress(9)">9</button>
-    <button class="numpad-btn empty"></button>
-    <button class="numpad-btn" onclick="pinPress(0)">0</button>
-    <button class="numpad-btn del" onclick="pinDel()">⌫</button>
+
+  <div id="login-step-setup" style="display:none">
+    <div class="pin-label" id="setup-welcome"></div>
+    <div class="field" style="width:240px">
+      <input type="password" id="setup-new-code" autocomplete="off" autocapitalize="off" autocorrect="off"
+        style="text-align:center;font-size:18px" placeholder="Ny kode">
+    </div>
+    <div class="field" style="width:240px">
+      <input type="password" id="setup-confirm-code" autocomplete="off" autocapitalize="off" autocorrect="off"
+        style="text-align:center;font-size:18px" placeholder="Gentag ny kode" onkeydown="if(event.key==='Enter')trySubmitSetup()">
+    </div>
+    <div class="pin-error" id="setup-error"></div>
+    <button class="btn btn-primary btn-block" onclick="trySubmitSetup()">Gem og log ind</button>
   </div>
-  <div class="pin-error" id="pin-error"></div>
-  <button id="biometric-login-btn" class="btn" style="display:none;margin-top:16px" onclick="attemptBiometricLogin()">🔓 Log ind med Face ID / fingeraftryk</button>
 </div>
 
 <!-- ══════════════ COACH APP ══════════════ -->
@@ -856,11 +847,23 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   <div class="modal">
     <div class="modal-title">Tilføj klient</div>
     <div class="field"><label>Navn</label><input type="text" id="new-client-name" placeholder="Fx Anette Jensen"></div>
-    <div class="field"><label>PIN (6 cifre)</label><input type="number" id="new-client-pin" placeholder="Fx 284719" maxlength="6"></div>
+    <div class="card-sub" style="margin:-4px 0 12px">Klienten vælger selv sin login-kode — du får en engangskode at sende videre, når klienten er oprettet.</div>
     <div class="field"><label>Autosvar (når du er offline)</label><textarea id="new-client-autoreply" placeholder="Hej! Jeg er ikke online lige nu — jeg vender tilbage hurtigst muligt 💪"></textarea></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-add-client')">Annuller</button>
       <button class="btn btn-primary" onclick="addClient()">Tilføj</button>
+    </div>
+  </div>
+</div>
+
+<!-- Engangskode (vises efter oprettelse eller nulstilling af en klients login) -->
+<div class="modal-overlay" id="modal-setup-code">
+  <div class="modal">
+    <div class="modal-title">Engangskode</div>
+    <div class="card-sub" id="setup-code-intro"></div>
+    <div style="font-family:'Menlo','Courier New',monospace;font-size:32px;font-weight:800;letter-spacing:4px;text-align:center;margin:20px 0;color:var(--accent);user-select:text" id="setup-code-value"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeModal('modal-setup-code')">Luk</button>
     </div>
   </div>
 </div>
@@ -1768,7 +1771,12 @@ async function pushToSupabase() {
   await section('clients', async () => {
     if (DATA.clients.length) {
       await sb.from('clients').upsert(DATA.clients.map(c => ({
-        id: c.id, name: c.name, pin: c.pin, height_cm: c.heightCm, birth_year: c.birthYear,
+        // pin/code_hash/setup_code er UDELADT bevidst — de styres udelukkende
+        // via generate_client_setup_code-RPC'en (se generateClientSetupCode()),
+        // aldrig via denne rutinemæssige, fulde synkronisering. Ellers kunne en
+        // forældet lokal kopi (fx en gammel browser-fane) nulstille en
+        // engangskode-migrering foretaget fra en anden enhed i mellemtiden.
+        id: c.id, name: c.name, height_cm: c.heightCm, birth_year: c.birthYear,
         birth_month: c.birthMonth || null, birth_day: c.birthDay || null, sex: c.sex, pal: c.pal,
         show_weight: !!(c.visibleStats && c.visibleStats.weight),
         show_bmi: !!(c.visibleStats && c.visibleStats.bmi),
@@ -2163,7 +2171,7 @@ async function refreshFromSupabase() {
     });
 
     const clients = clientsRes.data.map(c => ({
-      id: c.id, name: c.name, pin: c.pin, heightCm: c.height_cm, birthYear: c.birth_year,
+      id: c.id, name: c.name, pin: c.pin, codeHash: c.code_hash, setupCode: c.setup_code, heightCm: c.height_cm, birthYear: c.birth_year,
       birthMonth: c.birth_month || null, birthDay: c.birth_day || null, sex: c.sex, pal: c.pal,
       visibleStats: { weight: !!c.show_weight, bmi: !!c.show_bmi, bmr: !!c.show_bmr, kcal: !!c.show_kcal, sessionsLeft: !!c.show_sessions_left, distanceKm: !!c.show_distance_km },
       trainingGoals: c.training_goals || [], showTrainingGoal: !!c.show_training_goal,
@@ -2551,30 +2559,12 @@ function warnIfLocalStorageGettingFull(json) {
 }
 
 // ══════════════════════════════════════
-// PIN LOGIN
+// LOGIN
 // ══════════════════════════════════════
+// Bruges stadig til coachens EGEN PIN (saveCoachSettings) — klientens
+// login-kode har siden "Selvvalgte login-koder til klienter" ingen fast
+// længde eller taltvang længere, se tryLogin()/trySubmitSetup() nedenfor.
 const PIN_LENGTH = 6;
-let pinBuffer = '';
-
-function pinPress(n) {
-  if (pinBuffer.length >= PIN_LENGTH) return;
-  pinBuffer += n;
-  updatePinDots();
-  if (pinBuffer.length === PIN_LENGTH) setTimeout(tryLogin, 150);
-}
-
-function pinDel() {
-  pinBuffer = pinBuffer.slice(0, -1);
-  updatePinDots();
-  document.getElementById('pin-error').textContent = '';
-  document.querySelectorAll('.pin-dot').forEach(d => d.classList.remove('error'));
-}
-
-function updatePinDots() {
-  for (let i = 0; i < PIN_LENGTH; i++) {
-    document.getElementById('pd' + i).classList.toggle('filled', i < pinBuffer.length);
-  }
-}
 
 // ── AUTO-LÅS EFTER INAKTIVITET ──
 // Før: currentUser levede kun i hukommelsen, så appen bad om PIN igen ved enhver
@@ -2683,38 +2673,11 @@ setInterval(() => {
   } catch(e){}
 }, 30000);
 
-async function tryLogin() {
-  const pin = pinBuffer;
-  pinBuffer = '';
-  updatePinDots();
+// Klienten er midt i at vælge sin egen, endelige kode (efter at have tastet
+// en engangskode fra coachen) — se generate_client_setup_code/'complete-setup'.
+let pendingSetup = null;
 
-  function showPinError(msg) {
-    document.querySelectorAll('.pin-dot').forEach(d => d.classList.add('error'));
-    document.getElementById('pin-error').textContent = msg;
-    setTimeout(() => {
-      document.querySelectorAll('.pin-dot').forEach(d => d.classList.remove('error','filled'));
-      document.getElementById('pin-error').textContent = '';
-    }, 1500);
-  }
-
-  let result;
-  try {
-    const res = await fetch(SUPABASE_URL + '/functions/v1/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin })
-    });
-    result = await res.json();
-    if (!res.ok || result.error) {
-      showPinError(res.status === 429 ? 'For mange forsøg — prøv igen senere' : 'Forkert PIN — prøv igen');
-      return;
-    }
-  } catch (e) {
-    console.error('Login error', e);
-    showPinError('Kunne ikke oprette forbindelse — prøv igen');
-    return;
-  }
-
+async function completeLoginResult(result) {
   setSupabaseAuthToken(result.token);
   saveJwt(result.token);
   await refreshFromSupabase();
@@ -2738,7 +2701,88 @@ async function tryLogin() {
     return;
   }
 
-  showPinError('Kunne ikke hente din klientprofil — kontakt din coach');
+  document.getElementById('pin-error').textContent = 'Kunne ikke hente din klientprofil — kontakt din coach';
+}
+
+async function tryLogin() {
+  const codeInput = document.getElementById('login-code-input');
+  const code = codeInput.value.trim();
+  if (!code) return;
+  codeInput.value = '';
+
+  function showPinError(msg) {
+    document.getElementById('pin-error').textContent = msg;
+    setTimeout(() => { document.getElementById('pin-error').textContent = ''; }, 1500);
+  }
+
+  let result;
+  try {
+    const res = await fetch(SUPABASE_URL + '/functions/v1/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: code })
+    });
+    result = await res.json();
+
+    if (result.needs_setup) {
+      pendingSetup = { clientId: result.client_id, name: result.name, setupCode: result.setup_code };
+      document.getElementById('setup-welcome').textContent = `Velkommen, ${result.name}! Vælg din egen login-kode.`;
+      document.getElementById('login-step-code').style.display = 'none';
+      document.getElementById('login-step-setup').style.display = '';
+      return;
+    }
+    if (!res.ok || result.error) {
+      showPinError(res.status === 429 ? 'For mange forsøg — prøv igen senere' : 'Forkert kode — prøv igen');
+      return;
+    }
+  } catch (e) {
+    console.error('Login error', e);
+    showPinError('Kunne ikke oprette forbindelse — prøv igen');
+    return;
+  }
+
+  await completeLoginResult(result);
+}
+
+async function trySubmitSetup() {
+  if (!pendingSetup) return;
+  const newCode = document.getElementById('setup-new-code').value.trim();
+  const confirmCode = document.getElementById('setup-confirm-code').value.trim();
+  const errEl = document.getElementById('setup-error');
+  errEl.textContent = '';
+
+  if (newCode.length < 4) { errEl.textContent = 'Koden skal være mindst 4 tegn'; return; }
+  if (newCode !== confirmCode) { errEl.textContent = 'De to koder er ikke ens'; return; }
+
+  let result;
+  try {
+    const res = await fetch(SUPABASE_URL + '/functions/v1/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'complete-setup',
+        client_id: pendingSetup.clientId,
+        setup_code: pendingSetup.setupCode,
+        new_code: newCode,
+      })
+    });
+    result = await res.json();
+    if (!res.ok || result.error) {
+      errEl.textContent = result.error || 'Kunne ikke gemme koden';
+      return;
+    }
+  } catch (e) {
+    console.error('Complete-setup error', e);
+    errEl.textContent = 'Kunne ikke oprette forbindelse — prøv igen';
+    return;
+  }
+
+  pendingSetup = null;
+  document.getElementById('setup-new-code').value = '';
+  document.getElementById('setup-confirm-code').value = '';
+  document.getElementById('login-step-setup').style.display = 'none';
+  document.getElementById('login-step-code').style.display = '';
+  await completeLoginResult(result);
 }
 
 function logout() {
@@ -5592,7 +5636,7 @@ function openClientDetail(clientId) {
   currentClientId = clientId;
   const client = DATA.clients.find(c => c.id === clientId);
   document.getElementById('detail-client-name').textContent = client.name;
-  document.getElementById('detail-client-pin').textContent = `PIN: ${client.pin}`;
+  document.getElementById('detail-client-pin').textContent = clientLoginStatusLabel(client);
   document.querySelectorAll('.coach-view').forEach(v => v.style.display = 'none');
   const detail = document.getElementById('coach-client-detail');
   detail.style.display = 'flex';
@@ -6318,6 +6362,46 @@ function saveNotes(clientId) {
   showToast('Gemt');
 }
 
+// Kort status + handling til login-kode-feltet i klientens indstillinger —
+// samme tre tilstande som rc-mobiles EditClientScreen.tsx.
+function loginCodeStatusHtml(client) {
+  const btn = (label) => `<button class="btn" style="margin-top:8px" onclick="generateSetupCodeForClient(${client.id})">${label}</button>`;
+  if (client.codeHash) {
+    return `<div class="card-sub">Klienten har valgt sin egen login-kode — du kan ikke se den.</div>${btn('Nulstil / generér ny engangskode')}`;
+  }
+  if (client.setupCode) {
+    return `<div class="card-sub">Der er allerede sendt en engangskode, som endnu ikke er brugt: <b style="letter-spacing:2px">${client.setupCode}</b></div>${btn('Generér en ny kode')}`;
+  }
+  if (client.pin) {
+    return `<div class="card-sub">Klienten bruger stadig den gamle PIN-metode.</div>${btn('Skift til engangskode')}`;
+  }
+  return `<div class="card-sub">Klienten har ingen login-kode endnu.</div>${btn('Generér engangskode')}`;
+}
+
+function clientLoginStatusLabel(client) {
+  if (client.codeHash) return 'Login: egen kode';
+  if (client.setupCode) return 'Login: engangskode afventer';
+  if (client.pin) return 'PIN: ' + client.pin;
+  return 'Login: ikke sat';
+}
+
+async function generateSetupCodeForClient(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  const hasExisting = !!(client.pin || client.codeHash);
+  const msg = hasExisting
+    ? `${client.name}s nuværende login stopper med at virke med det samme. Du får en ny engangskode at sende videre. Fortsæt?`
+    : 'Du får en engangskode at sende til klienten uden for appen. Fortsæt?';
+  if (!confirm(msg)) return;
+  const { code, error } = await generateClientSetupCode(clientId);
+  if (error || !code) { alert('Kunne ikke generere engangskode: ' + (error || 'ukendt fejl')); return; }
+  client.pin = null;
+  client.codeHash = null;
+  client.setupCode = code;
+  renderDetailSettings(clientId);
+  document.getElementById('detail-client-pin').textContent = clientLoginStatusLabel(client);
+  showSetupCodeModal(client.name, code);
+}
+
 function renderDetailSettings(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client.features) client.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false };
@@ -6334,7 +6418,7 @@ function renderDetailSettings(clientId) {
   const currentPalInfo = palInfo(client.pal);
   document.getElementById('detail-settings').innerHTML = `
     <div class="field"><label>Navn</label><input type="text" id="set-name-${clientId}" value="${client.name}"></div>
-    <div class="field"><label>PIN (6 cifre)</label><input type="number" id="set-pin-${clientId}" value="${client.pin}"></div>
+    <div class="field"><label>Login-kode</label>${loginCodeStatusHtml(client)}</div>
     <div class="field"><label>Højde (cm) — bruges til BMI under Udvikling</label><input type="number" id="set-height-${clientId}" value="${client.heightCm || ''}" placeholder="fx 172"></div>
     <div class="field"><label>Fødselsår — bruges til BMR/kalorieberegning</label><input type="number" id="set-birthyear-${clientId}" value="${client.birthYear || ''}" placeholder="fx 1988"></div>
     <div class="field-row" style="display:flex;gap:10px">
@@ -6480,7 +6564,6 @@ function toggleClientStatVisibility(clientId, key) {
 function saveClientSettings(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   client.name = document.getElementById('set-name-' + clientId).value.trim();
-  client.pin = document.getElementById('set-pin-' + clientId).value.trim();
   const heightVal = document.getElementById('set-height-' + clientId).value.trim();
   client.heightCm = heightVal ? parseFloat(heightVal) : null;
   const birthYearVal = document.getElementById('set-birthyear-' + clientId).value.trim();
@@ -6495,7 +6578,7 @@ function saveClientSettings(clientId) {
   client.autoReply = document.getElementById('set-auto-' + clientId).value.trim();
   save();
   document.getElementById('detail-client-name').textContent = client.name;
-  document.getElementById('detail-client-pin').textContent = `PIN: ${client.pin}`;
+  document.getElementById('detail-client-pin').textContent = clientLoginStatusLabel(client);
   showToast('Gemt');
 }
 
@@ -6619,18 +6702,42 @@ function showAddClient() {
   document.getElementById('modal-add-client').classList.add('open');
 }
 
-function addClient() {
+// Genererer en engangskode for én klient (coach-only, håndhævet server-side
+// af generate_client_setup_code) — nulstiller samtidig klientens nuværende
+// adgang (pin/code_hash). Se rc-mobile CHANGELOG.md for baggrunden.
+async function generateClientSetupCode(clientId) {
+  const { data, error } = await sb.rpc('generate_client_setup_code', { p_client_id: clientId });
+  if (error) return { code: null, error: error.message };
+  return { code: data, error: null };
+}
+
+function showSetupCodeModal(clientName, code) {
+  document.getElementById('setup-code-intro').textContent =
+    `Send denne kode til ${clientName} uden for appen (SMS, i hånden, osv.). Den virker kun én gang, til klienten vælger sin egen, endelige login-kode.`;
+  document.getElementById('setup-code-value').textContent = code;
+  document.getElementById('modal-setup-code').classList.add('open');
+}
+
+async function addClient() {
   const name = document.getElementById('new-client-name').value.trim();
-  const pin = document.getElementById('new-client-pin').value.trim();
   const autoReply = document.getElementById('new-client-autoreply').value.trim();
-  if (!name || pin.length !== PIN_LENGTH) { alert('Navn og 6-cifret PIN er påkrævet'); return; }
-  if (DATA.clients.find(c => c.pin === pin) || pin === DATA.coachPin) { alert('Denne PIN er allerede i brug'); return; }
-  DATA.clients.push({ id: Date.now(), name, pin, heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachNotifiedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [], notes: '', autoReply });
-  save();
+  if (!name) { alert('Navn er påkrævet'); return; }
+  const newId = Date.now();
+  DATA.clients.push({ id: newId, name, pin: null, heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachNotifiedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [], notes: '', autoReply });
+  // Engangskoden kan først genereres når klienten rent faktisk findes i
+  // Supabase (RPC'en opdaterer en eksisterende række) — save() returnerer
+  // først når den ventende synkronisering er færdig, se queueSupabaseSync().
+  await save();
   closeModal('modal-add-client');
   document.getElementById('new-client-name').value = '';
-  document.getElementById('new-client-pin').value = '';
   renderCoachDashboard();
+
+  const { code, error } = await generateClientSetupCode(newId);
+  if (error || !code) {
+    alert('Klienten er oprettet, men engangskoden kunne ikke genereres: ' + (error || 'ukendt fejl') + '\n\nPrøv igen fra klientens indstillinger.');
+    return;
+  }
+  showSetupCodeModal(name, code);
 }
 
 let celebrationPhotoDraft = null;
