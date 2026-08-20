@@ -1783,6 +1783,7 @@ async function pushToSupabase() {
         show_bmi: !!(c.visibleStats && c.visibleStats.bmi),
         show_bmr: !!(c.visibleStats && c.visibleStats.bmr),
         show_kcal: !!(c.visibleStats && c.visibleStats.kcal),
+        show_weight_goal: !!(c.visibleStats && c.visibleStats.weightGoal),
         show_sessions_left: !!(c.visibleStats && c.visibleStats.sessionsLeft),
         show_distance_km: !!(c.visibleStats && c.visibleStats.distanceKm),
         feature_checkins: !!(c.features && c.features.checkins),
@@ -2175,7 +2176,7 @@ async function refreshFromSupabase() {
       id: c.id, name: c.name, pin: c.pin, codeHash: c.code_hash, setupCode: c.setup_code, heightCm: c.height_cm, birthYear: c.birth_year,
       birthMonth: c.birth_month || null, birthDay: c.birth_day || null, sex: c.sex, pal: c.pal,
       weightGoal: c.weight_goal || null,
-      visibleStats: { weight: !!c.show_weight, bmi: !!c.show_bmi, bmr: !!c.show_bmr, kcal: !!c.show_kcal, sessionsLeft: !!c.show_sessions_left, distanceKm: !!c.show_distance_km },
+      visibleStats: { weight: !!c.show_weight, bmi: !!c.show_bmi, bmr: !!c.show_bmr, kcal: !!c.show_kcal, weightGoal: !!c.show_weight_goal, sessionsLeft: !!c.show_sessions_left, distanceKm: !!c.show_distance_km },
       trainingGoals: c.training_goals || [], showTrainingGoal: !!c.show_training_goal,
       trainingPause: c.training_pause || null, celebrated: c.celebrated || {}, coachNotifiedGoals: c.coach_notified_goals || {},
       clientSeenSlotIds: c.client_seen_slot_ids || [], clientSeenMessageIds: c.client_seen_message_ids || [],
@@ -6537,6 +6538,10 @@ function renderDetailSettings(clientId) {
         <span class="toggle-label"><strong>Kcal (TDEE &amp; kalorie-mål)</strong></span>
       </div>
       <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <button class="toggle ${client.visibleStats.weightGoal ? 'on' : ''}" onclick="toggleClientStatVisibility(${clientId}, 'weightGoal')"></button>
+        <span class="toggle-label"><strong>Vægtmål</strong> — kun kategorien (fx "Moderat vægttab"), ikke selve forslaget/tallene</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
         <button class="toggle ${client.visibleStats.sessionsLeft ? 'on' : ''}" onclick="toggleClientStatVisibility(${clientId}, 'sessionsLeft')"></button>
         <span class="toggle-label"><strong>Træninger tilbage</strong> — kun antallet, ikke dine noter</span>
       </div>
@@ -6585,7 +6590,7 @@ function toggleClientFeature(clientId, key) {
 
 function toggleClientStatVisibility(clientId, key) {
   const client = DATA.clients.find(c => c.id === clientId);
-  if (!client.visibleStats) client.visibleStats = { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false };
+  if (!client.visibleStats) client.visibleStats = { weight: false, bmi: false, bmr: false, kcal: false, weightGoal: false, sessionsLeft: false, distanceKm: false };
   client.visibleStats[key] = !client.visibleStats[key];
   save();
   renderDetailSettings(clientId);
@@ -7604,7 +7609,7 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
 
   if (stats.bmr || stats.kcal) {
     shownAnything = true;
-    html += renderBMRTDEECard(client, latest.weight, stats.bmr, stats.kcal, latestTanitaBodyFatPercent(tanitaScans));
+    html += renderBMRTDEECard(client, latest.weight, stats.bmr, stats.kcal, latestTanitaBodyFatPercent(tanitaScans), stats.weightGoal);
   }
 
   // Rune: "der så på samme måde som alle andre fysiske data, kommer en
@@ -7830,9 +7835,14 @@ function suggestPalFromWeightGoal(weightGoal, weightEntries, bmr, currentPal) {
   };
 }
 
-function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent) {
+function renderBMRTDEECard(client, weight, showBMR, showKcal, bodyFatPercent, showWeightGoal) {
   const { bmr, usedTanita } = computeBMRAuto(client, weight, bodyFatPercent || null);
   let html = '';
+
+  if (showWeightGoal && client.weightGoal) {
+    html += `<div class="section-head">Mål</div>
+      <div class="card"><div class="card-sub">${escapeHtml(WEIGHT_GOALS[client.weightGoal].label)}</div></div>`;
+  }
 
   if (showBMR) {
     if (bmr === null) {
