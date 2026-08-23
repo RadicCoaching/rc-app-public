@@ -1347,6 +1347,9 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       <button class="btn" onclick="closeModal('modal-meal-log')">Annuller</button>
       <button class="btn btn-primary" onclick="saveMealLog()">Gem</button>
     </div>
+    <div class="divider" style="margin:16px 0"></div>
+    <div class="card-title" style="margin-bottom:8px">Tidligere måltider</div>
+    <div id="ml-history"></div>
   </div>
 </div>
 
@@ -1702,6 +1705,8 @@ let pendingDeletes = {
   trainingCheckins: new Set(),
   runLogs: new Set(),
   weightLogs: new Set(),
+  mealLogs: new Set(),
+  bodyMetrics: new Set(),
 };
 
 async function pushToSupabase() {
@@ -1909,6 +1914,10 @@ async function pushToSupabase() {
     if (DATA.bodyMetrics && DATA.bodyMetrics.length) {
       await sb.from('body_metrics').upsert(DATA.bodyMetrics.map(m => ({ id: m.id, client_id: m.clientId, date: m.date, weight: m.weight, steps: m.steps ?? null })));
     }
+    if (pendingDeletes.bodyMetrics.size) {
+      await sb.from('body_metrics').delete().in('id', [...pendingDeletes.bodyMetrics]);
+      pendingDeletes.bodyMetrics.clear();
+    }
   });
   // run_logs og training_checkins — klienten må gerne rette i sine EGNE allerede
   // gemte rækker (fx tilføje km/tid til en træning, redigere en tur, eller slette en
@@ -1975,6 +1984,10 @@ async function pushToSupabase() {
       await sb.from('meal_logs').upsert(DATA.mealLogs.map(m => ({
         id: m.id, client_id: m.clientId, date: m.date, time: m.time || '', meal_type: m.mealType, note: m.note || '', photo_url: m.photo || ''
       })));
+    }
+    if (pendingDeletes.mealLogs.size) {
+      await sb.from('meal_logs').delete().in('id', [...pendingDeletes.mealLogs]);
+      pendingDeletes.mealLogs.clear();
     }
   });
   await section('session_credits', async () => {
@@ -7301,6 +7314,18 @@ function deleteExerciseWeightEntry(clientId, programId, key, entryId) {
 // Hvor mange af de seneste målinger der vises direkte — resten ligger bagved,
 // usynligt i appen, men er stadig gemt og kan trækkes ud via dataeksporten.
 const EX_HISTORY_VISIBLE_COUNT = 3;
+const BM_HISTORY_VISIBLE_COUNT = 3;
+
+function deleteBodyMetric(id, clientId, panelId) {
+  if (!confirm('Slet denne måling?')) return;
+  DATA.bodyMetrics = (DATA.bodyMetrics || []).filter(m => m.id !== id);
+  pendingDeletes.bodyMetrics.add(id);
+  save();
+  showToast('Måling slettet');
+  const client = DATA.clients.find(c => c.id === clientId);
+  const statsToShow = currentUser === 'coach' ? { weight: true, bmi: true, bmr: true, kcal: true } : client.visibleStats;
+  renderProgressKrop(clientId, panelId, true, statsToShow);
+}
 
 function renderExerciseWeightHistory() {
   const client = DATA.clients.find(c => c.id === currentExerciseDetail.clientId);
@@ -7622,6 +7647,23 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
   if (stats.weight) {
     shownAnything = true;
     html += `<div class="section-head">Vægt</div><div class="card">${svgLineChart(weightPoints, { color: CHART_COLORS.accent, unitSuffix: ' kg' })}</div>`;
+    // Parity-fund (2026-08-23): rc-mobile kunne allerede slette en fejlagtig
+    // vægt/skridt-måling (EditClientScreen.tsx), webappen havde ingen
+    // deleteBodyMetric-funktion overhovedet. Kun de seneste par vist her,
+    // under selve grafen — grafen er stadig hovedvisningen.
+    if (showForm) {
+      const recentMetrics = entries.slice(-BM_HISTORY_VISIBLE_COUNT).reverse();
+      if (recentMetrics.length) {
+        html += `<div class="card" style="margin-top:8px">` + recentMetrics.map(m => `
+          <div class="historyRow" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+            <span class="card-sub">${m.date}</span>
+            <span style="display:flex;align-items:center;gap:10px">
+              <strong>${m.weight} kg</strong>
+              <span style="cursor:pointer;color:var(--danger)" onclick="deleteBodyMetric(${m.id}, ${clientId}, '${panelId}')">✕</span>
+            </span>
+          </div>`).join('') + `</div>`;
+      }
+    }
   }
 
   if (stats.bmi) {
@@ -9007,7 +9049,44 @@ function openMealLogModal() {
   document.getElementById('ml-note').value = '';
   document.getElementById('ml-date').value = new Date().toISOString().split('T')[0];
   document.getElementById('ml-time').value = new Date().toTimeString().slice(0, 5);
+  mealLogHistoryVisible = ML_HISTORY_VISIBLE_COUNT;
+  renderClientMealHistory();
   document.getElementById('modal-meal-log').classList.add('open');
+}
+
+// Parity-fund (2026-08-23): klienten kunne logge et måltid, men aldrig se sine
+// egne tidligere måltider — kun coachen kunne (i klient-detaljen). rc-mobile
+// havde allerede en fuld historik-skærm (ClientMealsScreen.tsx), webappen intet.
+const ML_HISTORY_VISIBLE_COUNT = 5;
+let mealLogHistoryVisible = ML_HISTORY_VISIBLE_COUNT;
+
+function renderClientMealHistory() {
+  const el = document.getElementById('ml-history');
+  if (!el) return;
+  const logs = (DATA.mealLogs || []).filter(m => m.clientId === currentUser).sort((a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')));
+  if (!logs.length) {
+    el.innerHTML = '<div class="card-sub">Ingen måltider logget endnu.</div>';
+    return;
+  }
+  const visible = logs.slice(0, mealLogHistoryVisible);
+  el.innerHTML = visible.map(m => `
+    <div class="checkin-card" style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+      ${m.photo ? `<img src="${m.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;flex-shrink:0">` : ''}
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600">${escapeHtml(m.mealType)} — ${m.date}${m.time ? ' ' + m.time : ''}</div>
+        ${m.note ? `<div class="card-sub" style="margin-top:2px">${escapeHtml(m.note)}</div>` : ''}
+      </div>
+      <span style="cursor:pointer;color:var(--danger);flex-shrink:0" onclick="deleteMealLog(${m.id})">✕</span>
+    </div>`).join('')
+    + (logs.length > visible.length ? `<div class="card-sub" style="cursor:pointer;color:var(--accent)" onclick="mealLogHistoryVisible += ${ML_HISTORY_VISIBLE_COUNT}; renderClientMealHistory()">Vis flere</div>` : '');
+}
+
+function deleteMealLog(id) {
+  if (!confirm('Slet dette måltid?')) return;
+  DATA.mealLogs = (DATA.mealLogs || []).filter(m => m.id !== id);
+  pendingDeletes.mealLogs.add(id);
+  save();
+  renderClientMealHistory();
 }
 
 function handleMealLogPhoto(inputEl) {
@@ -9441,6 +9520,10 @@ function renderTrainingGoalsSettings(clientId) {
     ${goalRows || '<div class="card-sub" style="margin-bottom:8px">Ingen mål sat endnu.</div>'}
     <button class="btn btn-sm" onclick="addTrainingGoal(${clientId})" style="margin-top:4px">+ Tilføj mål</button>
     <div class="divider" style="margin:14px 0"></div>
+    <div class="card-sub" style="margin-bottom:6px">Træningstyper (delt for alle klienter)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      ${(DATA.trainingTypes || []).map(t => `<span class="ss-tag" style="display:inline-flex;align-items:center;gap:6px">${escapeHtml(t)}<span style="cursor:pointer" onclick="removeTrainingType(${clientId}, '${escapeHtml(t).replace(/'/g, "\\'")}')">✕</span></span>`).join('')}
+    </div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
       <input type="text" id="new-training-type-${clientId}" placeholder="Ny type, fx 'Svømning'" style="flex:1">
       <button class="btn btn-sm" onclick="addTrainingType(${clientId})">+ Type</button>
@@ -9491,6 +9574,16 @@ function addTrainingType(clientId) {
   if (!val) return;
   if (!DATA.trainingTypes) DATA.trainingTypes = [];
   if (!DATA.trainingTypes.includes(val)) DATA.trainingTypes.push(val);
+  save();
+  renderDetailSettings(clientId);
+}
+
+// Parity-fund (2026-08-23): kunne tilføjes, men ikke fjernes igen — rc-mobile
+// havde allerede fjernelse (TrainingTypesScreen.tsx), webappen ikke. Ingen
+// beskyttelse mod at fjerne en type der er i brug et sted (matcher rc-mobile) —
+// eksisterende mål/logs med den type beholder bare deres tekstværdi uændret.
+function removeTrainingType(clientId, type) {
+  DATA.trainingTypes = (DATA.trainingTypes || []).filter(t => t !== type);
   save();
   renderDetailSettings(clientId);
 }
