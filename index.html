@@ -1701,6 +1701,7 @@ let pendingDeletes = {
   coachTasks: new Set(),
   trainingCheckins: new Set(),
   runLogs: new Set(),
+  weightLogs: new Set(),
 };
 
 async function pushToSupabase() {
@@ -1849,37 +1850,55 @@ async function pushToSupabase() {
     }
   });
 
-  // Vægt-log — synces PR. øvelse i et program (ikke hele tabellen på én gang), så
-  // andre øvelsers/klienters historik aldrig kan blive ramt af én opdatering.
+  // Vægt-log. FIX (2026-08-23): kørte tidligere delete() af ALT for den øvelse,
+  // derefter insert() af hele listen igen — på HVER save() i hele appen, ikke kun når
+  // vægt faktisk blev ændret. Fejlede insert'en (netværk, lukket fane, RLS) efter
+  // delete'en var gennemført, var den øvelses fulde historik permanent væk fra
+  // databasen — set som "logninger forsvinder efter de er gemt". Lagt om til upsert
+  // (aldrig et øjeblik uden data i databasen) + separat, målrettet sletning KUN af de
+  // id'er brugeren rent faktisk har fjernet (deleteExerciseWeightEntry), samme mønster
+  // som resten af appens pendingDeletes. Kræver at id'er er de rigtige database-id'er,
+  // se rettelsen i refreshFromSupabase() ovenfor.
   await section('weight_logs', async () => {
     const weightSyncJobs = [];
     DATA.clients.forEach(c => {
       (c.programs || []).forEach(p => {
         Object.keys(p.weightLogs || {}).forEach(libId => {
           const entries = p.weightLogs[libId] || [];
+          if (!entries.length) return;
           const libraryId = parseInt(libId, 10);
-          weightSyncJobs.push((async () => {
-            await sbCheck(sb.from('weight_logs').delete().eq('program_id', p.id).eq('library_id', libraryId));
-            if (entries.length) {
-              await sbCheck(sb.from('weight_logs').insert(entries.map(e => ({ program_id: p.id, library_id: libraryId, date: e.date, weight: e.weight }))));
-            }
-          })());
+          weightSyncJobs.push(
+            sbCheck(sb.from('weight_logs').upsert(entries.map(e => ({ id: e.id, program_id: p.id, library_id: libraryId, date: e.date, weight: e.weight })))),
+          );
         });
       });
     });
     await Promise.all(weightSyncJobs);
+    if (pendingDeletes.weightLogs.size) {
+      await sbCheck(sb.from('weight_logs').delete().in('id', [...pendingDeletes.weightLogs]));
+      pendingDeletes.weightLogs.clear();
+    }
   });
 
   // Billeder — synces PR. klient+øvelse, af samme grund som vægt-log ovenfor.
+  // FIX (2026-08-23): samme delete-før-insert-fejl som weight_logs ovenfor — en
+  // fejlet insert efter en gennemført delete kunne permanent slette et klient-foto.
+  // exercise_photos har allerede en unik-begrænsning på (client_id, library_id), så
+  // upsert med onConflict er en direkte, sikker erstatning — ingen separat sletning
+  // nødvendig her (billedet fjernes eksplicit andetsteds ved sletning af foto/øvelse).
   await section('exercise_photos', async () => {
     const photoSyncJobs = [];
     DATA.clients.forEach(c => {
       Object.keys(c.exercisePhotos || {}).forEach(libId => {
         const libraryId = parseInt(libId, 10);
-        photoSyncJobs.push((async () => {
-          await sb.from('exercise_photos').delete().eq('client_id', c.id).eq('library_id', libraryId);
-          await sb.from('exercise_photos').insert({ client_id: c.id, library_id: libraryId, image_url: c.exercisePhotos[libId] });
-        })());
+        photoSyncJobs.push(
+          sbCheck(
+            sb.from('exercise_photos').upsert(
+              { client_id: c.id, library_id: libraryId, image_url: c.exercisePhotos[libId] },
+              { onConflict: 'client_id,library_id' },
+            ),
+          ),
+        );
       });
     });
     await Promise.all(photoSyncJobs);
@@ -2142,21 +2161,29 @@ async function refreshFromSupabase() {
       });
     });
 
-    // Dubletter fra en tidligere race condition i sync'en (samme program+øvelse+dato
-    // gemt flere gange) bliver ryddet op HER ved indlæsning — vi beholder kun én række
-    // pr. dato (den seneste vi støder på). Næste save() skriver så den ryddede liste
-    // tilbage til Supabase og fjerner dubletterne der også.
+    // FIX (2026-08-23): brugte tidligere id: genId() her i stedet for det rigtige
+    // database-id (w.id) — så hver genindlæsning gav nye, midlertidige id'er der ikke
+    // matchede databasen. Kombineret med at pushToSupabase() dengang slettede ALT for
+    // en øvelse og gensendte listen ved HVER gem-handling (ikke kun ved faktiske
+    // ændringer i vægt-log), betød enhver fejlet/afbrudt synkronisering permanent tab
+    // af den øvelses fulde historik — set af Rune som "logninger forsvinder efter de
+    // er gemt". Rigtige id'er bevaret her, og selve synkroniseringen er lagt om til
+    // upsert (se pushToSupabase()) — se CHANGELOG.md for den fulde forklaring.
+    //
+    // Dubletter fra den gamle bug (samme program+øvelse+dato gemt flere gange, hver med
+    // sit eget rigtige id) ryddes IKKE længere automatisk op her — det ville nu selv
+    // kunne slette rigtige, forskellige registreringer med samme dato (fx to træningspas
+    // samme dag, som appen bevidst tillader). Se deleteExerciseWeightEntry() for at
+    // fjerne en fejlagtig dublet manuelt.
     const weightLogsByProgram = {};
     (wlRes.data || []).forEach(w => {
       const key = String(w.library_id);
       const pMap = (weightLogsByProgram[w.program_id] = weightLogsByProgram[w.program_id] || {});
-      pMap[key] = pMap[key] || {};
-      pMap[key][w.date] = { id: genId(), date: w.date, weight: w.weight };
+      (pMap[key] = pMap[key] || []).push({ id: w.id, date: w.date, weight: w.weight });
     });
     Object.keys(weightLogsByProgram).forEach(progId => {
       Object.keys(weightLogsByProgram[progId]).forEach(key => {
-        weightLogsByProgram[progId][key] = Object.values(weightLogsByProgram[progId][key])
-          .sort((a, b) => a.date.localeCompare(b.date));
+        weightLogsByProgram[progId][key].sort((a, b) => a.date.localeCompare(b.date));
       });
     });
 
@@ -7263,6 +7290,10 @@ function deleteExerciseWeightEntry(clientId, programId, key, entryId) {
   // Slet PRÆCIS den valgte måling via dens unikke id — aldrig via dato, som
   // tidligere kunne matche (og fjerne) flere målinger på én gang.
   program.weightLogs[key] = program.weightLogs[key].filter(e => e.id !== entryId);
+  // pushToSupabase() upserter kun de MÅLINGER DER STADIG FINDES lokalt — den
+  // sletter aldrig selv, så en fjernet måling skal eksplicit med i pendingDeletes
+  // for rent faktisk at forsvinde fra databasen igen (se weight_logs-fixet 2026-08-23).
+  pendingDeletes.weightLogs.add(entryId);
   save();
   renderExerciseWeightHistory();
 }
