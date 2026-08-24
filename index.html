@@ -2342,6 +2342,12 @@ async function pollForUpdates() {
   const isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
   if (isTyping) return; // prøv igen næste gang i stedet for at afbryde nogen der skriver
   const changed = await refreshFromSupabase();
+  // Samme fejl som rc-mobile havde (rettet 2026-08-24, se rc-mobile CHANGELOG.md):
+  // 'auth' er en sand streng, så "if (!changed) return" faldt aldrig igennem her —
+  // et JWT der udløb MENS appen var åben (ikke kun ved næste opstart/Face ID-oplåsning)
+  // blev aldrig opdaget af dette 45-sekunders tjek, og brugeren blev aldrig sendt
+  // tilbage til login-skærmen, bare mødt af rå, uforklarede fejl ved næste handling.
+  if (changed === 'auth') { clearJwtAndForceReLogin(); return; }
   if (!changed) return;
   checkForNewAlerts();
   rerenderCurrentView();
