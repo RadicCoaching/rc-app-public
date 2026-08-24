@@ -436,6 +436,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     <div class="client-header-tabs" style="position:static;margin:0;background:transparent;padding:12px 16px 0">
       <button class="client-tab active" id="lib-subtab-exercises" onclick="coachLibrarySubtab('exercises')">Øvelser</button>
       <button class="client-tab" id="lib-subtab-programs" onclick="coachLibrarySubtab('programs')">Programmer</button>
+      <button class="client-tab" id="lib-subtab-logs" onclick="coachLibrarySubtab('logs')">Samtaler &amp; Tid</button>
     </div>
     <div class="content">
       <div id="library-exercises-panel">
@@ -450,6 +451,27 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
         <div class="card-sub" style="margin-bottom:14px">Gem stærke, velafprøvede programmer her — så kan du trække dem ind hos en ny klient i stedet for at bygge fra bunden.</div>
         <div id="template-list"></div>
         <div id="template-editor-wrap" style="display:none"></div>
+      </div>
+      <div id="library-logs-panel" style="display:none">
+        <div class="client-header-tabs" style="position:static;margin:0 0 14px;background:transparent;padding:0">
+          <button class="client-tab active" id="logs-subtab-conversations" onclick="logsSubtab('conversations')">Samtaler</button>
+          <button class="client-tab" id="logs-subtab-time" onclick="logsSubtab('time')">Tid</button>
+        </div>
+        <div id="logs-conversations-panel">
+          <div style="display:flex;gap:8px;margin-bottom:14px">
+            <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="openConversationLogModal()">+ Ny samtale</button>
+            <button class="btn" onclick="exportConversationLogsCsv()">⬇ CSV</button>
+          </div>
+          <div id="conversation-log-list"></div>
+        </div>
+        <div id="logs-time-panel" style="display:none">
+          <div id="time-log-month-summary" style="margin-bottom:14px"></div>
+          <div style="display:flex;gap:8px;margin-bottom:14px">
+            <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="openTimeLogModal()">+ Ny tidslog</button>
+            <button class="btn" onclick="exportTimeLogsCsv()">⬇ CSV</button>
+          </div>
+          <div id="time-log-list"></div>
+        </div>
       </div>
     </div>
     <div class="bottomnav">
@@ -885,6 +907,56 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-add-apt')">Annuller</button>
       <button class="btn btn-primary" onclick="addAppointment()">Gem aftale</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ny samtale-log (matcher rc-mobiles SessionLogScreen.tsx — begge bygget ud fra
+     RC_Klient_Data_Template_1.xlsx, fanebladet "Samtaler") -->
+<div class="modal-overlay" id="modal-add-conversation">
+  <div class="modal">
+    <div class="modal-title">Ny samtale</div>
+    <div class="field"><label>Dato</label><input type="date" id="conv-date"></div>
+    <div class="field"><label>Klient (valgfri)</label>
+      <select id="conv-client"><option value="">Ingen klient</option></select>
+    </div>
+    <div class="field"><label>Type</label>
+      <select id="conv-type">
+        <option value="">Vælg…</option>
+        <option>Check-in</option><option>Mål-skift</option><option>Program-justering</option>
+        <option>Træningssamtale</option><option>Skade/sygdom</option><option>Andet</option>
+      </select>
+    </div>
+    <div class="field"><label>Hvad blev sagt / besluttet</label><textarea id="conv-content"></textarea></div>
+    <div class="field"><label>Mine tanker</label><textarea id="conv-thoughts"></textarea></div>
+    <div class="field"><label>Næste skridt</label><textarea id="conv-next-step"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-add-conversation')">Annuller</button>
+      <button class="btn btn-primary" onclick="addConversationLog()">Gem</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ny tidslog (fanebladet "Tid") -->
+<div class="modal-overlay" id="modal-add-time">
+  <div class="modal">
+    <div class="modal-title">Ny tidslog</div>
+    <div class="field"><label>Dato</label><input type="date" id="time-date"></div>
+    <div class="field"><label>Klient (valgfri)</label>
+      <select id="time-client"><option value="">Ingen klient</option></select>
+    </div>
+    <div class="field"><label>Type</label>
+      <select id="time-type">
+        <option value="">Vælg…</option>
+        <option>Session (live)</option><option>Programbygning</option><option>Check-in (skriftlig)</option>
+        <option>Opstartssamtale</option><option>Forberedelse</option><option>Andet</option>
+      </select>
+    </div>
+    <div class="field"><label>Minutter</label><input type="number" id="time-minutes" min="1" placeholder="Fx 90"></div>
+    <div class="field"><label>Note (valgfrit)</label><textarea id="time-note"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-add-time')">Annuller</button>
+      <button class="btn btn-primary" onclick="addTimeLog()">Gem</button>
     </div>
   </div>
 </div>
@@ -1453,6 +1525,8 @@ function loadData() {
       if (!parsed.exerciseLibrary) parsed.exerciseLibrary = [];
       parsed.exerciseLibrary.forEach(e => { if (!e.category) e.category = 'Andet'; });
       if (!parsed.programTemplates) parsed.programTemplates = [];
+      if (!parsed.conversationLogs) parsed.conversationLogs = [];
+      if (!parsed.timeLogs) parsed.timeLogs = [];
       (parsed.checkins || []).forEach(ci => {
         if (ci.hiddenForCoach === undefined) ci.hiddenForCoach = false;
         if (ci.hiddenForClient === undefined) ci.hiddenForClient = false;
@@ -1531,6 +1605,8 @@ function loadData() {
     coachPin: '123456',
     coachStatus: { online: true, offlineMsg: 'Hej! Jeg er offline lige nu — jeg vender tilbage hurtigst muligt 💪' },
     programTemplates: [],
+    conversationLogs: [],
+    timeLogs: [],
     exerciseLibrary: [
       { id: 1, name: 'Knæbøj', category: 'Ben', description: 'Stå med fødderne i skulderbredde. Bøj i knæ og hofter med neutral ryg, kom ned til min. 90 grader i knæet, pres op gennem hælene.', image: '' },
       { id: 2, name: 'Rumænsk dødløft', category: 'Ben', description: 'Stå med let bøjede knæ. Sænk stangen langs benene med lige ryg til du mærker et godt stræk i baglårene, rejs dig op igen.', image: '' },
@@ -1700,6 +1776,8 @@ let pendingDeletes = {
   programBlocks: new Set(),
   appointments: new Set(),
   programTemplates: new Set(),
+  conversationLogs: new Set(),
+  timeLogs: new Set(),
   sessionCredits: new Set(),
   coachTasks: new Set(),
   trainingCheckins: new Set(),
@@ -1852,6 +1930,35 @@ async function pushToSupabase() {
     if (pendingDeletes.programTemplates.size) {
       await sb.from('program_templates').delete().in('id', [...pendingDeletes.programTemplates]);
       pendingDeletes.programTemplates.clear();
+    }
+  });
+
+  // Samtaler & Tid — Rune (2026-08-24): "det var ud fra denne jeg ville ha bygget til
+  // klient tracking på tider og samtaler", matcher rc-mobiles SessionLogScreen.tsx 1:1
+  // (samme tabeller, samme felter — se rc-mobile CHANGELOG.md).
+  await section('coach_conversation_logs', async () => {
+    if (DATA.conversationLogs.length) {
+      await sb.from('coach_conversation_logs').upsert(DATA.conversationLogs.map(l => ({
+        id: l.id, date: l.date, client_id: l.clientId || null, type: l.type || null,
+        content: l.content || '', thoughts: l.thoughts || '', next_step: l.nextStep || ''
+      })));
+    }
+    if (pendingDeletes.conversationLogs.size) {
+      await sb.from('coach_conversation_logs').delete().in('id', [...pendingDeletes.conversationLogs]);
+      pendingDeletes.conversationLogs.clear();
+    }
+  });
+
+  await section('coach_time_logs', async () => {
+    if (DATA.timeLogs.length) {
+      await sb.from('coach_time_logs').upsert(DATA.timeLogs.map(l => ({
+        id: l.id, date: l.date, client_id: l.clientId || null, type: l.type || null,
+        minutes: l.minutes || 0, note: l.note || ''
+      })));
+    }
+    if (pendingDeletes.timeLogs.size) {
+      await sb.from('coach_time_logs').delete().in('id', [...pendingDeletes.timeLogs]);
+      pendingDeletes.timeLogs.clear();
     }
   });
 
@@ -2132,7 +2239,7 @@ async function refreshFromSupabase() {
   // af DATA — det er det der har fået nyligt gemte vægte/rækkefølger til at forsvinde igen.
   await supabaseSyncChain;
   try {
-    const [coachRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes, tmplRes, scRes, ctRes] = await Promise.all([
+    const [coachRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes, tmplRes, scRes, ctRes, convRes, timeLogRes] = await Promise.all([
       sb.from('coach_status').select('*').eq('id', 1).maybeSingle(),
       sb.from('exercise_library').select('*'),
       sb.from('clients').select('*'),
@@ -2150,6 +2257,8 @@ async function refreshFromSupabase() {
       sb.from('program_templates').select('*'),
       sb.from('session_credits').select('*'),
       sb.from('coach_tasks').select('*'),
+      sb.from('coach_conversation_logs').select('*'),
+      sb.from('coach_time_logs').select('*'),
     ]);
 
     const allResults = { coachRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes };
@@ -2164,6 +2273,8 @@ async function refreshFromSupabase() {
     if (tmplRes.error) console.error('Supabase refresh error (tmplRes)', tmplRes.error);
     if (scRes.error) console.error('Supabase refresh error (scRes) — er rc_supabase_migration_session_credits.sql kørt?', scRes.error);
     if (ctRes.error) console.error('Supabase refresh error (ctRes) — er coach_tasks-migrationen kørt?', ctRes.error);
+    if (convRes.error) console.error('Supabase refresh error (convRes) — er coach_conversation_logs-migrationen kørt?', convRes.error);
+    if (timeLogRes.error) console.error('Supabase refresh error (timeLogRes) — er coach_time_logs-migrationen kørt?', timeLogRes.error);
     // Tomt Supabase-projekt (skema lige kørt, intet pushet endnu) — behold lokal data, den bliver pushet op ved næste save().
     if (!clientsRes.data || !clientsRes.data.length) return false;
 
@@ -2259,6 +2370,8 @@ async function refreshFromSupabase() {
       mealLogs: (mlRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, time: m.time || '', mealType: m.meal_type, note: m.note || '', photo: m.photo_url || '' })),
       sessionCredits: (scRes.data || []).map(s => ({ id: s.id, clientId: s.client_id, date: s.date, type: s.type, delta: s.delta, note: s.note || '' })),
       coachTasks: (ctRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, title: t.title, dayOfWeek: t.day_of_week })),
+      conversationLogs: (convRes.data || []).map(l => ({ id: l.id, date: l.date, clientId: l.client_id, type: l.type || null, content: l.content || '', thoughts: l.thoughts || '', nextStep: l.next_step || '' })),
+      timeLogs: (timeLogRes.data || []).map(l => ({ id: l.id, date: l.date, clientId: l.client_id, type: l.type || null, minutes: l.minutes || 0, note: l.note || '' })),
       bookingSlots: (bookingRes.data || []).map(s => ({
         id: s.id, date: s.date, time: s.time || '', durationMin: s.duration_min || 60,
         // NYT (session 21) — synlighed er nu 'skjult' / 'udvalgte' / 'alle' + en liste af
@@ -5187,15 +5300,180 @@ function coachLibrarySubtab(tab) {
   currentLibrarySubtab = tab;
   document.getElementById('lib-subtab-exercises').classList.toggle('active', tab === 'exercises');
   document.getElementById('lib-subtab-programs').classList.toggle('active', tab === 'programs');
+  document.getElementById('lib-subtab-logs').classList.toggle('active', tab === 'logs');
   document.getElementById('library-exercises-panel').style.display = tab === 'exercises' ? 'block' : 'none';
   document.getElementById('library-programs-panel').style.display = tab === 'programs' ? 'block' : 'none';
+  document.getElementById('library-logs-panel').style.display = tab === 'logs' ? 'block' : 'none';
   if (tab === 'exercises') renderExerciseLibrary();
-  else { editingTemplateId = null; renderProgramTemplateLibrary(); }
+  else if (tab === 'programs') { editingTemplateId = null; renderProgramTemplateLibrary(); }
+  else { renderConversationLogList(); renderTimeLogList(); }
 }
 
 function libraryTopAction() {
   if (currentLibrarySubtab === 'programs') newProgramTemplate();
+  else if (currentLibrarySubtab === 'logs') { if (currentLogsSubtab === 'time') openTimeLogModal(); else openConversationLogModal(); }
   else openLibraryEditor(null);
+}
+
+// ══════════════════════════════════════
+// SAMTALER & TID — coachens egen klient-tracking (tider brugt, samtaler ført).
+// Matcher rc-mobiles SessionLogScreen.tsx, begge bygget ud fra
+// RC_Klient_Data_Template_1.xlsx (03 - Templates), fanebladene "Samtaler"/"Tid" —
+// Rune: "det var ud fra denne jeg ville ha bygget til klient tracking på
+// tider og samtaler." Ikke knyttet til nogen bestemt klient-fil — al data
+// samles ét sted på tværs af klienter (appens klient-felt er valgfrit,
+// bruges kun til at filtrere/mærke en log).
+// ══════════════════════════════════════
+let currentLogsSubtab = 'conversations';
+
+function logsSubtab(tab) {
+  currentLogsSubtab = tab;
+  document.getElementById('logs-subtab-conversations').classList.toggle('active', tab === 'conversations');
+  document.getElementById('logs-subtab-time').classList.toggle('active', tab === 'time');
+  document.getElementById('logs-conversations-panel').style.display = tab === 'conversations' ? 'block' : 'none';
+  document.getElementById('logs-time-panel').style.display = tab === 'time' ? 'block' : 'none';
+}
+
+function clientOptionsHtml(selectedId) {
+  return '<option value="">Ingen klient</option>' +
+    DATA.clients.map(c => `<option value="${c.id}" ${String(selectedId) === String(c.id) ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+}
+
+function openConversationLogModal() {
+  document.getElementById('conv-client').innerHTML = clientOptionsHtml(null);
+  document.getElementById('conv-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('conv-type').value = '';
+  document.getElementById('conv-content').value = '';
+  document.getElementById('conv-thoughts').value = '';
+  document.getElementById('conv-next-step').value = '';
+  document.getElementById('modal-add-conversation').classList.add('open');
+}
+
+function addConversationLog() {
+  const date = document.getElementById('conv-date').value;
+  const content = document.getElementById('conv-content').value.trim();
+  if (!date || !content) { alert('Angiv dato og hvad der blev sagt/besluttet'); return; }
+  const clientId = document.getElementById('conv-client').value;
+  DATA.conversationLogs.push({
+    id: genId(), date, clientId: clientId ? parseInt(clientId) : null,
+    type: document.getElementById('conv-type').value || null,
+    content, thoughts: document.getElementById('conv-thoughts').value.trim(),
+    nextStep: document.getElementById('conv-next-step').value.trim()
+  });
+  save();
+  closeModal('modal-add-conversation');
+  renderConversationLogList();
+  showToast('Samtale gemt');
+}
+
+function deleteConversationLog(id) {
+  if (!confirm('Slet denne samtale-log?')) return;
+  DATA.conversationLogs = DATA.conversationLogs.filter(l => l.id !== id);
+  pendingDeletes.conversationLogs.add(id);
+  save();
+  renderConversationLogList();
+}
+
+function renderConversationLogList() {
+  const el = document.getElementById('conversation-log-list');
+  if (!el) return;
+  const logs = [...DATA.conversationLogs].sort((a, b) => b.date.localeCompare(a.date));
+  if (!logs.length) { el.innerHTML = '<div class="empty"><span class="empty-icon">💬</span><p>Ingen samtaler logget endnu</p></div>'; return; }
+  el.innerHTML = logs.map(l => {
+    const client = l.clientId ? DATA.clients.find(c => c.id === l.clientId) : null;
+    return `<div class="card" style="margin-bottom:8px">
+      <div class="row-header" style="margin-bottom:6px">
+        <div class="row-header-label"><div class="card-sub" style="margin:0">${l.date}${client ? ' · ' + escapeHtml(client.name) : ''}${l.type ? ' · ' + escapeHtml(l.type) : ''}</div></div>
+        <button class="btn-icon" onclick="deleteConversationLog(${l.id})">✕</button>
+      </div>
+      <div>${escapeHtml(l.content)}</div>
+      ${l.nextStep ? `<div class="card-sub" style="margin-top:6px">Næste skridt: ${escapeHtml(l.nextStep)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function exportConversationLogsCsv() {
+  if (!DATA.conversationLogs.length) { showToast('Ingen samtaler at eksportere'); return; }
+  const header = 'Dato;Klient;Type;Hvad blev sagt / besluttet;Mine tanker;Næste skridt';
+  const rows = DATA.conversationLogs.map(l => {
+    const client = l.clientId ? DATA.clients.find(c => c.id === l.clientId) : null;
+    return [l.date, client ? client.name : '', l.type || '', l.content, l.thoughts, l.nextStep].map(csvEscape).join(';');
+  });
+  downloadTextFile('rc-samtaler-' + new Date().toISOString().split('T')[0] + '.csv', '﻿' + [header].concat(rows).join('\n'));
+}
+
+function openTimeLogModal() {
+  document.getElementById('time-client').innerHTML = clientOptionsHtml(null);
+  document.getElementById('time-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('time-type').value = '';
+  document.getElementById('time-minutes').value = '';
+  document.getElementById('time-note').value = '';
+  document.getElementById('modal-add-time').classList.add('open');
+}
+
+function addTimeLog() {
+  const date = document.getElementById('time-date').value;
+  const minutes = parseInt(document.getElementById('time-minutes').value, 10);
+  if (!date || !minutes || minutes <= 0) { alert('Angiv dato og antal minutter'); return; }
+  const clientId = document.getElementById('time-client').value;
+  DATA.timeLogs.push({
+    id: genId(), date, clientId: clientId ? parseInt(clientId) : null,
+    type: document.getElementById('time-type').value || null,
+    minutes, note: document.getElementById('time-note').value.trim()
+  });
+  save();
+  closeModal('modal-add-time');
+  renderTimeLogList();
+  showToast('Tidslog gemt');
+}
+
+function deleteTimeLog(id) {
+  if (!confirm('Slet denne tidslog?')) return;
+  DATA.timeLogs = DATA.timeLogs.filter(l => l.id !== id);
+  pendingDeletes.timeLogs.add(id);
+  save();
+  renderTimeLogList();
+}
+
+function renderTimeLogList() {
+  const el = document.getElementById('time-log-list');
+  if (!el) return;
+  const logs = [...DATA.timeLogs].sort((a, b) => b.date.localeCompare(a.date));
+
+  const summaryEl = document.getElementById('time-log-month-summary');
+  if (summaryEl) {
+    const now = new Date();
+    const monthMinutes = DATA.timeLogs
+      .filter(l => { const d = new Date(l.date + 'T12:00:00'); return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth(); })
+      .reduce((sum, l) => sum + (l.minutes || 0), 0);
+    summaryEl.innerHTML = `<div class="card" style="text-align:center">
+      <div class="card-sub" style="text-transform:uppercase;font-weight:700">Denne måned</div>
+      <div style="font-size:24px;font-weight:800;margin-top:4px">${Math.round(monthMinutes / 60 * 10) / 10} timer <span class="card-sub" style="font-weight:400">(${monthMinutes} min)</span></div>
+    </div>`;
+  }
+
+  if (!logs.length) { el.innerHTML = '<div class="empty"><span class="empty-icon">⏱️</span><p>Ingen tid logget endnu</p></div>'; return; }
+  el.innerHTML = logs.map(l => {
+    const client = l.clientId ? DATA.clients.find(c => c.id === l.clientId) : null;
+    return `<div class="card" style="margin-bottom:8px">
+      <div class="row-header" style="margin-bottom:6px">
+        <div class="row-header-label"><div class="card-sub" style="margin:0">${l.date}${client ? ' · ' + escapeHtml(client.name) : ''}</div></div>
+        <button class="btn-icon" onclick="deleteTimeLog(${l.id})">✕</button>
+      </div>
+      <div>${escapeHtml(l.type || 'Andet')} — ${l.minutes} min</div>
+      ${l.note ? `<div class="card-sub" style="margin-top:6px">${escapeHtml(l.note)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function exportTimeLogsCsv() {
+  if (!DATA.timeLogs.length) { showToast('Ingen tid at eksportere'); return; }
+  const header = 'Dato;Klient;Type;Minutter;Note';
+  const rows = DATA.timeLogs.map(l => {
+    const client = l.clientId ? DATA.clients.find(c => c.id === l.clientId) : null;
+    return [l.date, client ? client.name : '', l.type || '', l.minutes, l.note].map(csvEscape).join(';');
+  });
+  downloadTextFile('rc-tid-' + new Date().toISOString().split('T')[0] + '.csv', '﻿' + [header].concat(rows).join('\n'));
 }
 
 function newProgramTemplate() {
