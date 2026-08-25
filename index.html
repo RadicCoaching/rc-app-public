@@ -1586,7 +1586,7 @@ function loadData() {
             const val = p.weights[key];
             if (val != null && val !== '' && (!p.weightLogs[key] || !p.weightLogs[key].length)) {
               if (!p.weightLogs[key]) p.weightLogs[key] = [];
-              p.weightLogs[key].push({ id: genId(), date: new Date().toISOString().split('T')[0], weight: val });
+              p.weightLogs[key].push({ id: genId(), date: todayLocalStr(), weight: val });
             }
           });
           delete p.weights;
@@ -1677,6 +1677,24 @@ let genIdCounter = 0;
 function genId() {
   genIdCounter = (genIdCounter + 1) % 1000;
   return Date.now() * 1000 + genIdCounter;
+}
+
+// Rune (rc-mobile, samme dag): "Skal jo ikke UTC hvis det forstyrre noget?
+// det skal rettes" — `<Date>.toISOString().split('T')[0]` (brugt 45 steder i
+// denne fil, fundet efter samme fejl i rc-mobile — se dens CHANGELOG.md)
+// konverterer altid til UTC FØRST. For en dansk bruger (UTC+1/+2) betyder
+// det at alt logget/beregnet sent om aftenen — efter kl. 22-24 lokal tid,
+// afhængig af sommer-/vintertid — kan blive stemplet med GÅRSDAGENS dato i
+// stedet for den rigtige. Disse to bruger enhedens egne lokale
+// dato-komponenter (getFullYear/getMonth/getDate) i stedet for UTC-konvertering.
+function toLocalDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function todayLocalStr() {
+  return toLocalDateStr(new Date());
 }
 
 const EXERCISE_CATEGORIES = ['Ben', 'Ryg', 'Bryst', 'Skuldre', 'Arme', 'Core', 'Cardio', 'Mobilitet', 'Andet'];
@@ -3149,7 +3167,7 @@ function isSlotVisibleToClient(s, clientId) {
 }
 
 function getOpenSlotsForClient(client) {
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   return (DATA.bookingSlots || []).filter(s =>
     s.status === 'ledig' && s.date >= now && isSlotVisibleToClient(s, client.id)
   );
@@ -3840,7 +3858,7 @@ function sendCoachMessage(clientId) {
   if (!text) return;
   const ci = {
     id: Date.now(), clientId,
-    date: new Date().toISOString().split('T')[0],
+    date: todayLocalStr(),
     energy: null, sleep: null, training: null,
     comment: '',
     reply: text,
@@ -3863,7 +3881,7 @@ function renderCoachCalendar() {
   const el = document.getElementById('coach-cal-content');
   const now = new Date();
   const upcoming = DATA.appointments
-    .filter(a => new Date(a.date) >= new Date(now.toISOString().split('T')[0]))
+    .filter(a => new Date(a.date) >= new Date(toLocalDateStr(now)))
     .sort((a,b) => a.date.localeCompare(b.date));
 
   if (!upcoming.length) {
@@ -3912,7 +3930,7 @@ function showAddAppointment() {
   const sel = document.getElementById('apt-client');
   sel.innerHTML = '<option value="">Ingen klient (privat aftale)</option>' +
     DATA.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  document.getElementById('apt-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('apt-date').value = todayLocalStr();
   document.getElementById('apt-duration').value = 60;
   document.getElementById('apt-location').value = '';
   document.getElementById('modal-add-apt').classList.add('open');
@@ -4016,7 +4034,7 @@ function showAddSlotModal() {
   addSlotVisibilityMode = 'alle'; // samme udgangspunkt som tidligere ("Alle klienter")
   addSlotSelectedClients = new Set();
   renderSlotVisibilityUI('add');
-  document.getElementById('slot-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('slot-date').value = todayLocalStr();
   document.getElementById('slot-time').value = '';
   document.getElementById('slot-duration').value = 60;
   document.getElementById('slot-location').value = localStorage.getItem('rc_last_slot_location') || 'Lemvig Motionscenter, Transportvej 21, 7620 Lemvig';
@@ -4142,7 +4160,7 @@ async function saveNewSlot() {
 // springes bare stille over. Samme regel som rc-mobiles parseBulkSlots.ts.
 function parseBulkSlotList(text) {
   const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
+  const todayStr = toLocalDateStr(now);
   const currentYear = now.getFullYear();
   const pattern = /(\d{1,2})[/\-.](\d{1,2})(?:[/\-.](\d{2,4}))?\D+?(\d{1,2})[.:](\d{2})/;
   const results = [];
@@ -4187,7 +4205,7 @@ function formatBulkSlotList(slots) {
 }
 
 async function shareReservedSlotsAsText() {
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   const reserved = (DATA.bookingSlots || [])
     .filter(s => s.status !== 'booket' && s.visibility !== 'udvalgte' && s.date >= now)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
@@ -4624,7 +4642,7 @@ function slotsToCardsHtml(slots) {
 function renderCoachBookingSlots() {
   const el = document.getElementById('coach-booking-content');
   if (!el) return;
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   const slots = (DATA.bookingSlots || []).filter(s => s.date >= now).sort((a,b) => (a.date + a.time).localeCompare(b.date + b.time));
   // Ryd valgte tider der ikke længere findes i listen (fx slettet i mellemtiden)
   const stillHere = new Set(slots.map(s => s.id));
@@ -4730,7 +4748,7 @@ function renderClientBookingSlots() {
   const el = document.getElementById('client-booking-content');
   if (!el) return;
   const clientId = currentUser;
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
 
   const openSlots = (DATA.bookingSlots || [])
     .filter(s => s.status === 'ledig' && s.date >= now && isSlotVisibleToClient(s, clientId))
@@ -4781,7 +4799,7 @@ function renderClientBookingSlots() {
 // — det er jo klientens egen kalender).
 function downloadMyBookingsICS() {
   const clientId = currentUser;
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   const myBookings = (DATA.bookingSlots || [])
     .filter(s => s.status === 'booket' && s.bookedByClientId === clientId && s.date >= now)
     .sort((a,b) => a.date.localeCompare(b.date));
@@ -4938,7 +4956,7 @@ function downloadSlotICS(slotId) {
 }
 
 function downloadAllBookingsICS() {
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   const slots = (DATA.bookingSlots || []).filter(s => s.status === 'booket' && s.date >= now).sort((a,b) => a.date.localeCompare(b.date));
   if (!slots.length) { showToast('Ingen kommende bookinger'); return; }
   const events = slots.map(s => slotToICSEvent(s, s.bookedByClientId ? DATA.clients.find(c => c.id === s.bookedByClientId) : null));
@@ -4993,7 +5011,7 @@ function downloadAppointmentICS(aptId) {
 }
 
 function downloadAllAppointmentsICS() {
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   const isCoach = currentUser === 'coach';
   const apts = DATA.appointments
     .filter(a => a.date >= now && (isCoach || a.clientId === currentUser))
@@ -5281,7 +5299,7 @@ function exportAllClientData(clientId) {
   // \uFEFF (BOM) sikrer at æ/ø/å vises korrekt når filen åbnes i Excel.
   const csv = '\uFEFF' + [cols.join(';')].concat(rows.map(r => r.map(csvEscape).join(';'))).join('\n');
   const safeName = (client.name || 'klient').toLowerCase().replace(/[^a-z0-9æøå]+/gi, '-');
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayLocalStr();
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -5341,7 +5359,7 @@ function clientOptionsHtml(selectedId) {
 
 function openConversationLogModal() {
   document.getElementById('conv-client').innerHTML = clientOptionsHtml(null);
-  document.getElementById('conv-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('conv-date').value = todayLocalStr();
   document.getElementById('conv-type').value = '';
   document.getElementById('conv-content').value = '';
   document.getElementById('conv-thoughts').value = '';
@@ -5399,12 +5417,12 @@ function exportConversationLogsCsv() {
     const client = l.clientId ? DATA.clients.find(c => c.id === l.clientId) : null;
     return [l.date, client ? client.name : '', l.type || '', l.content, l.thoughts, l.nextStep].map(csvEscape).join(';');
   });
-  downloadTextFile('rc-samtaler-' + new Date().toISOString().split('T')[0] + '.csv', '﻿' + [header].concat(rows).join('\n'));
+  downloadTextFile('rc-samtaler-' + todayLocalStr() + '.csv', '﻿' + [header].concat(rows).join('\n'));
 }
 
 function openTimeLogModal() {
   document.getElementById('time-client').innerHTML = clientOptionsHtml(null);
-  document.getElementById('time-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('time-date').value = todayLocalStr();
   document.getElementById('time-type').value = '';
   document.getElementById('time-minutes').value = '';
   document.getElementById('time-note').value = '';
@@ -5473,7 +5491,7 @@ function exportTimeLogsCsv() {
     const client = l.clientId ? DATA.clients.find(c => c.id === l.clientId) : null;
     return [l.date, client ? client.name : '', l.type || '', l.minutes, l.note].map(csvEscape).join(';');
   });
-  downloadTextFile('rc-tid-' + new Date().toISOString().split('T')[0] + '.csv', '﻿' + [header].concat(rows).join('\n'));
+  downloadTextFile('rc-tid-' + todayLocalStr() + '.csv', '﻿' + [header].concat(rows).join('\n'));
 }
 
 function newProgramTemplate() {
@@ -7002,7 +7020,7 @@ function renderDetailKlip(clientId) {
 }
 
 function openSessionCreditModal() {
-  document.getElementById('sc-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('sc-date').value = todayLocalStr();
   document.getElementById('sc-type').value = 'overkrop';
   document.getElementById('sc-amount').value = 1;
   document.getElementById('sc-note').value = '';
@@ -7029,7 +7047,7 @@ function onSessionCreditTypeChange() {
 
 function saveSessionCredit() {
   const clientId = currentClientId;
-  const date = document.getElementById('sc-date').value || new Date().toISOString().split('T')[0];
+  const date = document.getElementById('sc-date').value || todayLocalStr();
   const type = document.getElementById('sc-type').value;
   const note = document.getElementById('sc-note').value.trim();
   let delta;
@@ -7202,7 +7220,7 @@ function renderClientHome() {
       : '';
   }
 
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   const openSlots = (DATA.bookingSlots || []).filter(s => s.status === 'ledig' && s.date >= now && isSlotVisibleToClient(s, clientId));
   const bannerEl = document.getElementById('client-home-booking-banner');
   if (bannerEl) {
@@ -7307,7 +7325,7 @@ function submitCheckin() {
   const hasAnyScore = !!(ciScores.energy || ciScores.sleep || ciScores.training);
   const canFreeMessage = !client.features || client.features.freeMessage !== false;
   const canMultipleCheckins = !!(client.features && client.features.multipleCheckins);
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayLocalStr();
 
   // Databasen tillader kun én check-in pr. klient pr. dag (unik-begrænsning
   // "checkins_client_id_date_key"). Klienten kan ikke redigere en allerede sendt
@@ -7569,7 +7587,7 @@ function saveExerciseWeight(clientId, programId, key, value, date) {
   const program = client.programs.find(p => p.id === programId);
   if (!program.weightLogs) program.weightLogs = {};
   if (!program.weightLogs[key]) program.weightLogs[key] = [];
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || todayLocalStr();
   if (value === '') return; // intet at gemme — brug ✕ ud for en tidligere måling for at slette den
   const normalized = /^bw$/i.test(String(value).trim()) ? 'BW' : value;
   // Hvert tryk på "Gem vægt" opretter en NY registrering — også hvis der i
@@ -7660,7 +7678,7 @@ function openExerciseDetail(programId, libraryId, clientId) {
   exSetWeightMode(parsed.mode);
   if (parsed.mode !== 'bw') document.getElementById('ex-detail-weight-input').value = parsed.value;
   if (parsed.mode === 'bw' && parsed.extra) document.getElementById('ex-detail-extra-weight-input').value = parsed.extra;
-  document.getElementById('ex-detail-date-input').value = new Date().toISOString().split('T')[0];
+  document.getElementById('ex-detail-date-input').value = todayLocalStr();
   renderExerciseWeightHistory();
   document.getElementById('modal-exercise-detail').classList.add('open');
 }
@@ -7748,7 +7766,7 @@ async function saveExerciseDetailWeight() {
   }
   const pending = saveExerciseWeight(currentExerciseDetail.clientId, currentExerciseDetail.programId, currentExerciseDetail.libraryId, value, date);
   renderExerciseWeightHistory();
-  document.getElementById('ex-detail-date-input').value = new Date().toISOString().split('T')[0];
+  document.getElementById('ex-detail-date-input').value = todayLocalStr();
   // Genopfrisk feltet i samme tilstand (Kropsvægt henter evt. opdateret tal på ny)
   exSetWeightMode(exDetailWeightMode);
   if (currentUser === 'coach') {
@@ -7890,7 +7908,7 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
   if (showForm) {
     html += `<div class="card" style="margin-bottom:16px">
       <div class="card-title" style="margin-bottom:12px">Log ny måling</div>
-      <div class="field"><label>Dato</label><input type="date" id="bm-date-${panelId}" value="${new Date().toISOString().split('T')[0]}"></div>
+      <div class="field"><label>Dato</label><input type="date" id="bm-date-${panelId}" value="${todayLocalStr()}"></div>
       <div class="field"><label>Vægt (kg)</label><input type="number" step="0.1" inputmode="decimal" id="bm-weight-${panelId}" placeholder="fx 78.5"></div>
       <div class="field"><label>Gennemsnitligt skridt/dag (seneste uge, ca. — valgfrit)</label><input type="number" step="1" inputmode="numeric" id="bm-steps-${panelId}" placeholder="fx 8200"></div>
       <div class="card-sub" style="margin:-8px 0 12px">Kig i din telefons egen skridttæller — ikke noget du skal opdatere hver dag.</div>
@@ -8088,7 +8106,7 @@ function suggestPalFromTrainingFrequency(trainingDates, windowDays) {
   if (!trainingDates.length) return null;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - windowDays);
-  const cutoffStr = cutoff.toISOString().split('T')[0];
+  const cutoffStr = toLocalDateStr(cutoff);
   const recentCount = trainingDates.filter(d => d >= cutoffStr).length;
   const weeklyAvg = recentCount / (windowDays / 7);
   const tier = FREQUENCY_PAL_TIERS.find(t => weeklyAvg <= t.maxWeekly) || FREQUENCY_PAL_TIERS[FREQUENCY_PAL_TIERS.length - 1];
@@ -8108,7 +8126,7 @@ const STEPS_STALE_AFTER_DAYS = 30;
 function latestStepsAverage(entries) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - STEPS_STALE_AFTER_DAYS);
-  const cutoffStr = cutoff.toISOString().split('T')[0];
+  const cutoffStr = toLocalDateStr(cutoff);
   const withSteps = entries.filter(e => e.steps != null && e.steps >= 0 && e.date >= cutoffStr).sort((a, b) => b.date.localeCompare(a.date));
   if (!withSteps.length) return null;
   return { avgSteps: withSteps[0].steps, date: withSteps[0].date };
@@ -8143,7 +8161,7 @@ function computeWeightTrend(entries, windowDays) {
   windowDays = windowDays || WEIGHT_TREND_WINDOW_DAYS;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - windowDays);
-  const cutoffStr = cutoff.toISOString().split('T')[0];
+  const cutoffStr = toLocalDateStr(cutoff);
   const points = entries
     .filter(e => e.weight != null && e.date >= cutoffStr)
     .map(e => ({ t: new Date(e.date).getTime() / 86400000, w: e.weight }))
@@ -8285,7 +8303,7 @@ function saveBodyMetric(clientId, panelId) {
   const birthMonthRaw = document.getElementById('bm-birthmonth-' + panelId).value;
   const sexRaw = document.getElementById('bm-sex-' + panelId).value;
   const dateEl = document.getElementById('bm-date-' + panelId);
-  const chosenDate = (dateEl && dateEl.value) || new Date().toISOString().split('T')[0];
+  const chosenDate = (dateEl && dateEl.value) || todayLocalStr();
   if (weightVal == null && stepsVal == null) { alert('Indtast mindst vægt eller skridt'); return; }
   const client = DATA.clients.find(c => c.id === clientId);
   if (heightRaw !== '') client.heightCm = parseFloat(heightRaw);
@@ -8538,7 +8556,7 @@ function renderDistanceSection(clientId, panelId, showForm, type) {
   if (showForm) {
     // Interval-tilstand er bevidst kun for Løb.
     const mode = type === 'Løb' ? (runFormMode[panelId] || 'normal') : 'normal';
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocalStr();
     html += `<div class="card" style="margin-bottom:16px">
       <div class="card-title" style="margin-bottom:12px">Log en ${noun}</div>
       ${type === 'Løb' ? `<div style="display:flex;gap:6px;margin-bottom:12px">
@@ -8615,7 +8633,7 @@ function renderDistanceSection(clientId, panelId, showForm, type) {
 function saveRunLog(clientId, panelId) {
   const type = progressDistanceType[panelId] || 'Løb';
   const dateEl = document.getElementById('run-date-' + panelId);
-  const date = dateEl.value || new Date().toISOString().split('T')[0];
+  const date = dateEl.value || todayLocalStr();
   const mode = type === 'Løb' ? (runFormMode[panelId] || 'normal') : 'normal';
 
   let distanceKm, durationSec, intervalMeta = null;
@@ -8762,6 +8780,9 @@ function saveEditDistance() {
 // ══════════════════════════════════════
 // UGENTLIGE TRÆNINGSMÅL — uge-helpers, fremgang, fejring
 // ══════════════════════════════════════
+// `.toISOString()` herunder er OK selvom den konverterer til UTC — datoen er
+// bevidst konstrueret ved middag ("T12:00:00"), og Danmarks UTC-afstand
+// (maks. UTC+2) flytter aldrig middag over en dato-grænse.
 function getMondayOf(dateStr) {
   const d = new Date(dateStr + 'T12:00:00');
   const day = d.getDay();
@@ -8770,7 +8791,7 @@ function getMondayOf(dateStr) {
   return d.toISOString().split('T')[0];
 }
 function currentWeekKey() {
-  return getMondayOf(new Date().toISOString().split('T')[0]);
+  return getMondayOf(todayLocalStr());
 }
 function isDateInWeekKey(dateStr, weekKey) {
   return getMondayOf(dateStr) === weekKey;
@@ -9190,7 +9211,7 @@ function openTrainingCheckinModal() {
   document.getElementById('tc-photo-preview').innerHTML = '';
   document.getElementById('tc-photo-input').value = '';
   document.getElementById('tc-note').value = '';
-  document.getElementById('tc-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('tc-date').value = todayLocalStr();
   tcRating = 0;
   document.querySelectorAll('#score-tc-rating .score-btn').forEach(b => b.classList.remove('sel'));
   const goalTypes = (client.trainingGoals || []).map(g => g.type);
@@ -9239,7 +9260,7 @@ function setTcRunMode(mode) {
 let gtReturnCtx = null;
 function startGpsTrainingFromModal() {
   const type = document.getElementById('tc-type').value;
-  const date = document.getElementById('tc-date').value || new Date().toISOString().split('T')[0];
+  const date = document.getElementById('tc-date').value || todayLocalStr();
   gtReturnCtx = { type, date };
   // Hvis der allerede er valgt "Interval" og udfyldt antal/distance/pause i formularen,
   // sender vi det med over på GPS-skærmen i stedet for at nulstille det.
@@ -9267,7 +9288,7 @@ function handleTrainingCheckinPhoto(inputEl) {
 }
 
 function saveTrainingCheckin() {
-  const date = document.getElementById('tc-date').value || new Date().toISOString().split('T')[0];
+  const date = document.getElementById('tc-date').value || todayLocalStr();
   const type = document.getElementById('tc-type').value;
   const note = document.getElementById('tc-note').value.trim();
   if (!type) { showToast('Vælg en træningstype'); return; }
@@ -9331,7 +9352,7 @@ function openMealLogModal() {
   document.getElementById('ml-photo-preview').innerHTML = '';
   document.getElementById('ml-photo-input').value = '';
   document.getElementById('ml-note').value = '';
-  document.getElementById('ml-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('ml-date').value = todayLocalStr();
   document.getElementById('ml-time').value = new Date().toTimeString().slice(0, 5);
   mealLogHistoryVisible = ML_HISTORY_VISIBLE_COUNT;
   renderClientMealHistory();
@@ -9427,7 +9448,7 @@ function handleMealLogPhoto(inputEl) {
 }
 
 function saveMealLog() {
-  const date = document.getElementById('ml-date').value || new Date().toISOString().split('T')[0];
+  const date = document.getElementById('ml-date').value || todayLocalStr();
   const time = document.getElementById('ml-time').value || '';
   const mealType = document.getElementById('ml-type').value;
   const note = document.getElementById('ml-note').value.trim();
@@ -9480,7 +9501,7 @@ async function loadTanitaScanQuotaAndHistory(clientId) {
     .order('created_at', { ascending: false });
   if (error) { document.getElementById('ts-quota').textContent = ''; return; }
   const monthStart = new Date(); monthStart.setDate(1);
-  const monthStartStr = monthStart.toISOString().split('T')[0];
+  const monthStartStr = toLocalDateStr(monthStart);
   const usedThisMonth = (data || []).filter(s => (s.created_at || '') >= monthStartStr).length;
   const limit = DATA.tanitaScanMonthlyLimit;
   const quotaEl = document.getElementById('ts-quota');
@@ -9574,7 +9595,7 @@ function renderTanitaResult(result) {
   document.getElementById('ts-results').innerHTML = `
     <div class="card">
       <div class="card-title" style="margin-bottom:4px">Fundne værdier — tjek de er rigtige</div>
-      <div class="field" style="margin:10px 0"><label>Dato for scanningen</label><input type="date" id="ts-scan-date" value="${new Date().toISOString().split('T')[0]}"></div>
+      <div class="field" style="margin:10px 0"><label>Dato for scanningen</label><input type="date" id="ts-scan-date" value="${todayLocalStr()}"></div>
       ${empty ? '<div class="card-sub">Fandt ingen læsbare værdier — prøv et tydeligere billede.</div>' : rows.join('')}
       <div style="display:flex;gap:10px;margin-top:16px">
         <button class="btn" style="flex:1" onclick="document.getElementById('ts-results').innerHTML=''; tsResult=null;">Tag nyt billede</button>
@@ -9590,7 +9611,7 @@ async function saveTanitaScan() {
   // vise en kurve?" — fx et gammelt papirudskrift fotograferet i dag, men
   // hørende til en tidligere dato. Datofeltet defaulter til i dag men kan
   // ændres, se renderTanitaResult().
-  const scanDate = document.getElementById('ts-scan-date').value || new Date().toISOString().split('T')[0];
+  const scanDate = document.getElementById('ts-scan-date').value || todayLocalStr();
   const { error } = await sb.from('tanita_scans').insert({
     id: genId(),
     client_id: tsTargetClientId,
@@ -10001,7 +10022,7 @@ function exportMealLogPdf(clientId) {
 function renderClientCalendar() {
   const clientId = currentUser;
   const el = document.getElementById('client-cal-content');
-  const now = new Date().toISOString().split('T')[0];
+  const now = todayLocalStr();
   const apts = DATA.appointments
     .filter(a => a.clientId === clientId && a.date >= now)
     .sort((a,b) => a.date.localeCompare(b.date));
@@ -10139,7 +10160,7 @@ function showToast(msg) {
 // ══════════════════════════════════════
 // Pre-fill date for apt modal
 document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('apt-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('apt-date').value = todayLocalStr();
   tryRestoreSession().then(restored => { if (!restored) updateBiometricLoginButton(); });
 });
 
@@ -10513,7 +10534,7 @@ function gtFinish() {
   if (gtTotalDistance < 5 && gtElapsedSec < 5) { clientNav('home'); return; }
 
   const type = (gtReturnCtx && gtReturnCtx.type) || 'Løb';
-  const date = (gtReturnCtx && gtReturnCtx.date) || new Date().toISOString().split('T')[0];
+  const date = (gtReturnCtx && gtReturnCtx.date) || todayLocalStr();
 
   // Gå tilbage til forsiden FØR modalen genåbnes, så bund-navigationen er der, og så
   // "Gem" bagefter rent faktisk opdaterer forsiden (saveTrainingCheckin tjekker
