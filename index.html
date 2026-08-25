@@ -7308,9 +7308,19 @@ function renderClientHome() {
         const deltaText = delta === 0 ? 'Din vægt har holdt sig stabil' : `Du har ${delta < 0 ? 'tabt' : 'taget på med'} ${Math.abs(delta)} kg`;
         weightHtml = `<div style="font-size:15px;line-height:1.4">${deltaText} over de seneste ${weightPoints.length} målinger.</div>`;
       }
-      const milestoneHtml = milestoneCount > 0
-        ? `<div style="color:var(--accent);font-weight:700;font-size:14px;margin-top:${weightHtml ? '10px' : '0'}">🎉 ${milestoneCount} mål nået undervejs</div>`
-        : '';
+      let milestoneHtml = '';
+      if (milestoneCount > 0) {
+        const MILESTONE_SHOW_COUNT = 3;
+        const keys = Object.keys(client.celebrated || {}).sort((a, b) => b.localeCompare(a));
+        const shown = keys.slice(0, MILESTONE_SHOW_COUNT);
+        const remaining = keys.length - shown.length;
+        const linesHtml = shown.map(k => `<div style="font-size:13px;line-height:1.45">${escapeHtml(describeCelebrationKey(k))}</div>`).join('');
+        const remainingHtml = remaining > 0 ? `<div style="color:var(--gray);font-size:13px;margin-top:2px">+${remaining} flere milepæle</div>` : '';
+        milestoneHtml = `<div style="margin-top:${weightHtml ? '10px' : '0'}">
+          <div style="color:var(--accent);font-weight:700;font-size:14px;margin-bottom:4px">🎉 ${milestoneCount} mål nået undervejs</div>
+          ${linesHtml}${remainingHtml}
+        </div>`;
+      }
       devEl.innerHTML = `<div class="card" style="margin-bottom:16px">
         <div class="last-ci-lbl" style="margin-bottom:4px">Din udvikling</div>
         ${weightHtml}${milestoneHtml}
@@ -8980,6 +8990,20 @@ function checkCelebrations(clientId) {
   }
   save();
   if (messages.length) showCelebration(messages);
+}
+
+// Rune: "Nu står feks 6 mål nået under vejs? Hvlke mål er det? Man kan som
+// klient ikke se hvilke der er nået?" — client.celebrated-nøglerne
+// (`${weekKey}_${type}` eller `${weekKey}_overall`) bar allerede al
+// information, men "Din udvikling"-kortet viste kun et bart antal. Parser
+// én nøgle til en læsbar sætning. Porteret fra rc-mobiles
+// describeCelebrationKey() i lib/trainingGoals.ts — genbruger
+// formatMealWeekHeading() (identisk uge-formatering, defineret nedenfor).
+function describeCelebrationKey(key) {
+  const weekKey = key.slice(0, 10);
+  const rest = key.slice(11);
+  const week = formatMealWeekHeading(weekKey);
+  return rest === 'overall' ? `${week} — Hele ugens træningsmål nået` : `${week} — ${rest}`;
 }
 
 function showCelebration(messages) {
