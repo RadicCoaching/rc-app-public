@@ -9344,25 +9344,68 @@ function openMealLogModal() {
 const ML_HISTORY_VISIBLE_COUNT = 5;
 let mealLogHistoryVisible = ML_HISTORY_VISIBLE_COUNT;
 
+// Dag-navne til ugeoverskrifter — matcher rc-mobiles lib/mealGrouping.ts.
+const MEAL_DAY_NAMES = ['Søndag', 'Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag'];
+
+function formatMealWeekHeading(weekKey) {
+  const start = new Date(weekKey + 'T12:00:00');
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const fmt = d => String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
+  return 'Uge ' + fmt(start) + '–' + fmt(end);
+}
+
+// Rune: "Logs til kost ligger bare hulter til bulter? De skal ligge i
+// rækkefølge på tider, tidligste tid først. Derefter skal det deles op i
+// dage og uger så jeg har en smule overblik på appen også?" — sorterede før
+// på dato+tid faldende (seneste tid først samme dag); nu grupperet i
+// uger/dage (nyeste uge/dag øverst), måltider INDEN i hver dag kronologisk
+// (tidligste tid først). Samme gruppering som rc-mobiles lib/mealGrouping.ts.
 function renderClientMealHistory() {
   const el = document.getElementById('ml-history');
   if (!el) return;
-  const logs = (DATA.mealLogs || []).filter(m => m.clientId === currentUser).sort((a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')));
+  const logs = (DATA.mealLogs || []).filter(m => m.clientId === currentUser);
   if (!logs.length) {
     el.innerHTML = '<div class="card-sub">Ingen måltider logget endnu.</div>';
     return;
   }
-  const visible = logs.slice(0, mealLogHistoryVisible);
-  el.innerHTML = visible.map(m => `
-    <div class="checkin-card" style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
-      ${m.photo ? `<img src="${m.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;flex-shrink:0">` : ''}
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600">${escapeHtml(m.mealType)} — ${m.date}${m.time ? ' ' + m.time : ''}</div>
-        ${m.note ? `<div class="card-sub" style="margin-top:2px">${escapeHtml(m.note)}</div>` : ''}
-      </div>
-      <span style="cursor:pointer;color:var(--danger);flex-shrink:0" onclick="deleteMealLog(${m.id})">✕</span>
-    </div>`).join('')
-    + (logs.length > visible.length ? `<div class="card-sub" style="cursor:pointer;color:var(--accent)" onclick="mealLogHistoryVisible += ${ML_HISTORY_VISIBLE_COUNT}; renderClientMealHistory()">Vis flere</div>` : '');
+
+  const byDate = {};
+  logs.forEach(m => { (byDate[m.date] = byDate[m.date] || []).push(m); });
+  const days = Object.keys(byDate)
+    .map(date => ({ date, meals: byDate[date].slice().sort((a, b) => (a.time || '').localeCompare(b.time || '')) }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const byWeek = {};
+  days.forEach(day => { const wk = getMondayOf(day.date); (byWeek[wk] = byWeek[wk] || []).push(day); });
+  const weeks = Object.keys(byWeek).map(weekKey => ({ weekKey, days: byWeek[weekKey] })).sort((a, b) => b.weekKey.localeCompare(a.weekKey));
+
+  // "Vis flere" tæller stadig i antal MÅLTIDER (mealLogHistoryVisible), for
+  // ikke at ændre den kendte adfærd — bare fordelt ud på uge/dag-grupper her.
+  let shown = 0;
+  let html = '';
+  for (const week of weeks) {
+    if (shown >= mealLogHistoryVisible) break;
+    let weekHtml = '';
+    for (const day of week.days) {
+      if (shown >= mealLogHistoryVisible) break;
+      const dayMeals = day.meals.slice(0, mealLogHistoryVisible - shown);
+      shown += dayMeals.length;
+      weekHtml += `<div class="card-sub" style="font-weight:700;margin:8px 0 4px">${MEAL_DAY_NAMES[new Date(day.date + 'T12:00:00').getDay()]} ${day.date}</div>`
+        + dayMeals.map(m => `
+        <div class="checkin-card" style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+          ${m.photo ? `<img src="${m.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;flex-shrink:0">` : ''}
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600">${m.time ? m.time + ' — ' : ''}${escapeHtml(m.mealType)}</div>
+            ${m.note ? `<div class="card-sub" style="margin-top:2px">${escapeHtml(m.note)}</div>` : ''}
+          </div>
+          <span style="cursor:pointer;color:var(--danger);flex-shrink:0" onclick="deleteMealLog(${m.id})">✕</span>
+        </div>`).join('');
+    }
+    if (weekHtml) html += `<div class="card-sub" style="color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 2px">${formatMealWeekHeading(week.weekKey)}</div>` + weekHtml;
+  }
+  const totalMeals = logs.length;
+  html += (totalMeals > shown ? `<div class="card-sub" style="cursor:pointer;color:var(--accent)" onclick="mealLogHistoryVisible += ${ML_HISTORY_VISIBLE_COUNT}; renderClientMealHistory()">Vis flere</div>` : '');
+  el.innerHTML = html;
 }
 
 function deleteMealLog(id) {
