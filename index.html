@@ -5357,14 +5357,25 @@ function clientOptionsHtml(selectedId) {
     DATA.clients.map(c => `<option value="${c.id}" ${String(selectedId) === String(c.id) ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
 }
 
-function openConversationLogModal() {
-  document.getElementById('conv-client').innerHTML = clientOptionsHtml(null);
+// Sat når modalen åbnes fra ÉN klients egen detaljevisning (Samtaler &
+// noter-sektionen i renderDetailHistory) i stedet for den globale liste
+// under Kartotek — styrer hvilken visning der genopfriskes efter gem/slet.
+let conversationModalContextClientId = null;
+
+function openConversationLogModal(presetClientId) {
+  conversationModalContextClientId = presetClientId || null;
+  document.getElementById('conv-client').innerHTML = clientOptionsHtml(presetClientId || null);
   document.getElementById('conv-date').value = todayLocalStr();
   document.getElementById('conv-type').value = '';
   document.getElementById('conv-content').value = '';
   document.getElementById('conv-thoughts').value = '';
   document.getElementById('conv-next-step').value = '';
   document.getElementById('modal-add-conversation').classList.add('open');
+}
+
+function refreshConversationViews() {
+  renderConversationLogList();
+  if (conversationModalContextClientId != null) renderDetailHistory(conversationModalContextClientId);
 }
 
 function addConversationLog() {
@@ -5380,7 +5391,7 @@ function addConversationLog() {
   });
   save();
   closeModal('modal-add-conversation');
-  renderConversationLogList();
+  refreshConversationViews();
   showToast('Samtale gemt');
 }
 
@@ -5390,6 +5401,17 @@ function deleteConversationLog(id) {
   pendingDeletes.conversationLogs.add(id);
   save();
   renderConversationLogList();
+}
+
+// Kaldes fra "Slet" i klientens EGEN Samtaler & noter-sektion
+// (renderDetailHistory) — samme sletning, men genopfrisker den visning i
+// stedet for den globale Kartotek-liste.
+function deleteConversationLogFromDetail(id, clientId) {
+  if (!confirm('Slet denne samtale-log?')) return;
+  DATA.conversationLogs = DATA.conversationLogs.filter(l => l.id !== id);
+  pendingDeletes.conversationLogs.add(id);
+  save();
+  renderDetailHistory(clientId);
 }
 
 function renderConversationLogList() {
@@ -6034,10 +6056,15 @@ function renderDetailHistory(clientId) {
   const cis = DATA.checkins.filter(c => c.clientId === clientId && !c.hiddenForCoach).map(c => ({ date: c.date, kind: 'checkin', data: c }));
   const tcs = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId).map(t => ({ date: t.date, kind: 'training', data: t }));
   const mls = (DATA.mealLogs || []).filter(m => m.clientId === clientId).map(m => ({ date: m.date, kind: 'meal', data: m }));
+  // Rune: "Byg samtaler og noter direkte til klienten men kun så jeg kan se
+  // det" — "Samtaler" lå kun som én global liste for ALLE klienter under
+  // Kartotek. Filtreret på DENNE klient, direkte her — hele
+  // coach-detaljevisningen er allerede kun synlig for coachen.
+  const cls = (DATA.conversationLogs || []).filter(l => l.clientId === clientId).map(l => ({ date: l.date, kind: 'samtale', data: l }));
 
   const widget = renderTrainingProgressWidget(clientId, true);
 
-  if (!cis.length && !tcs.length && !mls.length) {
+  if (!cis.length && !tcs.length && !mls.length && !cls.length) {
     el.innerHTML = widget + '<div class="empty"><span class="empty-icon">📋</span><p>Ingen check-ins endnu</p></div>';
     return;
   }
@@ -6058,11 +6085,21 @@ function renderDetailHistory(clientId) {
         </div>
       </div>`;
     }
-    const m = item.data;
+    if (item.kind === 'meal') {
+      const m = item.data;
+      return `<div class="checkin-card">
+        <div class="checkin-header"><div class="checkin-time">${fmtDate(m.date)}${m.time ? ' · ' + m.time : ''} · 🍽️ ${escapeHtml(m.mealType)}</div></div>
+        ${m.photo ? `<img src="${m.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
+        ${m.note ? `<div class="checkin-comment">"${escapeHtml(m.note)}"</div>` : ''}
+      </div>`;
+    }
+    const l = item.data;
     return `<div class="checkin-card">
-      <div class="checkin-header"><div class="checkin-time">${fmtDate(m.date)}${m.time ? ' · ' + m.time : ''} · 🍽️ ${escapeHtml(m.mealType)}</div></div>
-      ${m.photo ? `<img src="${m.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
-      ${m.note ? `<div class="checkin-comment">"${escapeHtml(m.note)}"</div>` : ''}
+      <div class="checkin-header"><div class="checkin-time">${fmtDate(l.date)}${l.type ? ' · ' + escapeHtml(l.type) : ''}</div></div>
+      <div class="checkin-comment">${escapeHtml(l.content)}</div>
+      ${l.thoughts ? `<div class="card-sub" style="margin-top:6px">Mine tanker: ${escapeHtml(l.thoughts)}</div>` : ''}
+      ${l.nextStep ? `<div class="card-sub" style="margin-top:4px">Næste skridt: ${escapeHtml(l.nextStep)}</div>` : ''}
+      <div style="margin-top:8px"><span class="card-sub" style="cursor:pointer;color:var(--danger)" onclick="deleteConversationLogFromDetail(${l.id}, ${clientId})">Slet</span></div>
     </div>`;
   };
 
@@ -6072,6 +6109,7 @@ function renderDetailHistory(clientId) {
     { key: 'checkin', label: '📋 Check-ins', items: cis },
     { key: 'training', label: '🏃 Træning gennemført', items: tcs },
     { key: 'meal', label: '🍽️ Kost-log', items: mls },
+    { key: 'samtale', label: '💬 Samtaler & noter', items: cls },
   ];
 
   el.innerHTML = widget + sections.filter(s => s.items.length).map(sec => {
@@ -6083,9 +6121,24 @@ function renderDetailHistory(clientId) {
         <strong style="font-size:15px;flex:1">${sec.label}</strong>
         <span class="card-sub" style="margin:0">${sec.items.length}</span>
       </div>
-      ${isOpen ? `<div style="padding:0 14px 12px">${sorted.map(renderItem).join('')}</div>` : ''}
+      ${isOpen ? `<div style="padding:0 14px 12px">
+        ${sec.key === 'samtale' ? `<button class="btn btn-sm btn-primary btn-block" style="margin-bottom:10px" onclick="openConversationLogModal(${clientId})">+ Ny samtale</button>` : ''}
+        ${sorted.map(renderItem).join('')}
+      </div>` : ''}
     </div>`;
   }).join('');
+  // "Samtaler & noter" er den ENESTE sektion som kan være tom OG stadig
+  // skal kunne tilføjes til — resten forudsætter data fra andre steder i
+  // appen (check-ins/træning/kost logges af klienten selv).
+  if (!cls.length) {
+    el.innerHTML += `<div style="margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="padding:12px 14px;background:var(--card)"><strong style="font-size:15px">💬 Samtaler & noter</strong></div>
+      <div style="padding:0 14px 12px">
+        <div class="card-sub" style="margin-bottom:10px">Ingen samtaler noteret endnu</div>
+        <button class="btn btn-sm btn-primary btn-block" onclick="openConversationLogModal(${clientId})">+ Ny samtale</button>
+      </div>
+    </div>`;
+  }
 }
 
 let editingProgramId = null; // null = liste, 'new' = opretter, tal = redigerer eksisterende
