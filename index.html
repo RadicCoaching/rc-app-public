@@ -3905,10 +3905,27 @@ function sendCoachMessage(clientId) {
 // ══════════════════════════════════════
 // COACH: CALENDAR
 // ══════════════════════════════════════
+// Rune: "Syned bookede tider skal ende over i aftaler på en eller anden
+// måde?" — Aftaler (appointments-tabellen) og Book tid (booking_slots) var
+// to helt adskilte lister; en klients bookede tid dukkede aldrig op her.
+// Omdanner bookede booking_slots til samme visnings-form som en Appointment
+// (mærket _source:'booking'), så de kan flettes ind i samme dags-liste —
+// stadig ejet af Book-tider (redigeres/aflyses derfra, ingen "Slet" her).
+// Porteret fra rc-mobiles AppointmentsScreen.tsx (samme dag).
+function bookedSlotsAsAppointments() {
+  return DATA.bookingSlots
+    .filter(s => s.status === 'booket')
+    .map(s => ({
+      id: s.id, clientId: s.bookedByClientId, date: s.date, time: s.time,
+      title: s.customName || 'RC Træning', coachOnly: false,
+      durationMin: s.durationMin, location: s.location, _source: 'booking',
+    }));
+}
+
 function renderCoachCalendar() {
   const el = document.getElementById('coach-cal-content');
   const now = new Date();
-  const upcoming = DATA.appointments
+  const upcoming = DATA.appointments.concat(bookedSlotsAsAppointments())
     .filter(a => new Date(a.date) >= new Date(toLocalDateStr(now)))
     .sort((a,b) => a.date.localeCompare(b.date));
 
@@ -3923,6 +3940,7 @@ function renderCoachCalendar() {
     if (!byDate[a.date]) byDate[a.date] = [];
     byDate[a.date].push(a);
   });
+  Object.values(byDate).forEach(list => list.sort((a, b) => (a.time || '').localeCompare(b.time || '')));
 
   let html = `<button class="btn btn-block" style="margin-bottom:16px" onclick="downloadAllAppointmentsICS()">📥 Download alle aftaler (.ics)</button>`;
   html += Object.entries(byDate).map(([date, apts]) => {
@@ -3941,9 +3959,10 @@ function renderCoachCalendar() {
             <div class="evt-title">${a.time ? a.time + ' — ' : ''}${a.title}</div>
             ${client ? `<div class="evt-who">👤 ${client.name}</div>` : (a.coachOnly ? '<div class="evt-who" style="color:var(--lgray)">Privat aftale</div>' : '')}
             ${a.location ? `<div class="evt-who">📍 ${a.location}</div>` : ''}
+            ${a._source === 'booking' ? '<div class="evt-who" style="color:var(--lgray)">📅 Booket i Book tid</div>' : ''}
             <div style="display:flex;gap:10px;margin-top:4px">
               <button class="btn btn-sm btn-ghost" style="padding:2px 0;font-size:11px" onclick="downloadAppointmentICS(${a.id})">📥 Download</button>
-              <button class="btn btn-sm btn-ghost btn-danger" style="padding:2px 0;font-size:11px" onclick="deleteAppointment(${a.id})">Slet</button>
+              ${a._source === 'booking' ? '' : `<button class="btn btn-sm btn-ghost btn-danger" style="padding:2px 0;font-size:11px" onclick="deleteAppointment(${a.id})">Slet</button>`}
             </div>
           </div>`;
         }).join('')}
@@ -5032,7 +5051,7 @@ function appointmentToICSEvent(apt, client) {
 }
 
 function downloadAppointmentICS(aptId) {
-  const apt = DATA.appointments.find(a => a.id === aptId);
+  const apt = DATA.appointments.find(a => a.id === aptId) || bookedSlotsAsAppointments().find(a => a.id === aptId);
   if (!apt) return;
   const client = apt.clientId ? DATA.clients.find(c => c.id === apt.clientId) : null;
   downloadICSFile('rc-aftale-' + apt.id + '.ics', wrapICS([appointmentToICSEvent(apt, client)]));
@@ -5041,7 +5060,7 @@ function downloadAppointmentICS(aptId) {
 function downloadAllAppointmentsICS() {
   const now = todayLocalStr();
   const isCoach = currentUser === 'coach';
-  const apts = DATA.appointments
+  const apts = DATA.appointments.concat(bookedSlotsAsAppointments())
     .filter(a => a.date >= now && (isCoach || a.clientId === currentUser))
     .sort((a,b) => a.date.localeCompare(b.date));
   if (!apts.length) { showToast('Ingen kommende aftaler'); return; }
@@ -10311,7 +10330,7 @@ function renderClientCalendar() {
   const clientId = currentUser;
   const el = document.getElementById('client-cal-content');
   const now = todayLocalStr();
-  const apts = DATA.appointments
+  const apts = DATA.appointments.concat(bookedSlotsAsAppointments())
     .filter(a => a.clientId === clientId && a.date >= now)
     .sort((a,b) => a.date.localeCompare(b.date));
 
