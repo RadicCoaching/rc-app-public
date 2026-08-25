@@ -6930,6 +6930,12 @@ function renderDetailSettings(clientId) {
     </div>
     <div class="divider"></div>
     <div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="margin-bottom:2px">Klientrapport</div>
+      <div class="card-sub" style="margin-bottom:12px">Opsummering af de seneste 30 dage — check-in-gennemsnit, træningsfrekvens, vægtudvikling og samtaler. Til egen vurdering, eller til at dele med klienten.</div>
+      <button class="btn btn-block" onclick="exportClientReportPdf(${clientId})">📊 Eksportér klientrapport (PDF)</button>
+    </div>
+    <div class="divider"></div>
+    <div class="card" style="margin-bottom:16px">
       <div class="card-title" style="margin-bottom:2px">Scan kropsanalyse</div>
       <div class="card-sub" style="margin-bottom:12px">Tag/vælg et foto af en Tanita-udskrift eller lignende — AI'en læser alle synlige tal (vægt, BMI, kropsfedt%, kropsalder, væskebalance m.fl.) og forklarer dem.</div>
       <button class="btn btn-block" onclick="openScanTanitaModal(${clientId})">📷 Scan kropsanalyse</button>
@@ -10133,6 +10139,94 @@ function exportMealLogPdf(clientId) {
   });
 
   doc.save(`kostlog-${client.name.replace(/\s+/g, '_')}.pdf`);
+}
+
+// Rune, efter en gennemgang af klient-tracking: "byg export analyse ideen"
+// — CSV/PDF-eksporterne ovenfor er alle RÅDATA, ingen af dem er en ANALYSE.
+// Denne er en periodisk klientrapport (gennemsnit, frekvenser, udvikling)
+// for de seneste 30 dage, til egen vurdering eller til at dele med
+// klienten. Porteret fra rc-mobiles clientReportPdf.ts samme dag (samme
+// indhold, jsPDF i stedet for expo-print/HTML — web's egen etablerede
+// PDF-teknik, se exportMealLogPdf() ovenfor).
+function exportClientReportPdf(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  if (!client) return;
+  if (!window.jspdf) { showToast('PDF-modul kunne ikke indlæses — tjek internetforbindelse'); return; }
+
+  const windowDays = 30;
+  const since = (() => { const d = new Date(); d.setDate(d.getDate() - windowDays); return toLocalDateStr(d); })();
+  const today = todayLocalStr();
+
+  const checkins = DATA.checkins.filter(c => c.clientId === clientId && c.date >= since);
+  const training = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId && t.date >= since);
+  const meals = (DATA.mealLogs || []).filter(m => m.clientId === clientId && m.date >= since);
+  const conversations = (DATA.conversationLogs || []).filter(l => l.clientId === clientId && l.date >= since);
+  const weightsInWindow = (DATA.bodyMetrics || [])
+    .filter(m => m.clientId === clientId && m.weight != null && m.date >= since)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const avg = nums => nums.length ? Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10 : null;
+  const energyAvg = avg(checkins.map(c => c.energy).filter(v => v != null));
+  const sleepAvg = avg(checkins.map(c => c.sleep).filter(v => v != null));
+  const trainingAvg = avg(checkins.map(c => c.training).filter(v => v != null));
+
+  let weightLine = 'Ingen vægt-målinger i perioden.';
+  if (weightsInWindow.length >= 2) {
+    const delta = Math.round((weightsInWindow[weightsInWindow.length - 1].weight - weightsInWindow[0].weight) * 10) / 10;
+    weightLine = delta === 0
+      ? `Stabil vægt (${weightsInWindow.length} målinger).`
+      : `${delta < 0 ? 'Tabt' : 'Taget på'} ${Math.abs(delta)} kg (${weightsInWindow.length} målinger, ${weightsInWindow[0].date} → ${weightsInWindow[weightsInWindow.length - 1].date}).`;
+  } else if (weightsInWindow.length === 1) {
+    weightLine = `Kun 1 måling i perioden (${weightsInWindow[0].weight} kg, ${weightsInWindow[0].date}).`;
+  }
+
+  const countBy = (list, keyFn) => {
+    const counts = {};
+    list.forEach(item => { const k = keyFn(item) || 'Andet'; counts[k] = (counts[k] || 0) + 1; });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  };
+  const trainingTypes = countBy(training, t => t.type);
+  const conversationTypes = countBy(conversations, l => l.type);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 40;
+  let y = margin;
+
+  doc.setFontSize(18);
+  doc.text(`Klientrapport — ${client.name}`, margin, y);
+  y += 24;
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  doc.text(`Periode: ${since} → ${today} (${windowDays} dage) · Genereret ${today}`, margin, y);
+  y += 28;
+  doc.setTextColor(0);
+
+  const section = (title, lines) => {
+    doc.setFontSize(13);
+    doc.setFont(undefined, 'bold');
+    doc.text(title, margin, y);
+    y += 18;
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(11);
+    lines.forEach(line => {
+      const wrapped = doc.splitTextToSize(line, pageW - margin * 2);
+      doc.text(wrapped, margin, y);
+      y += wrapped.length * 14 + 2;
+    });
+    y += 14;
+  };
+
+  section(`Check-ins (${checkins.length} i perioden)`, [
+    `Energi (snit): ${energyAvg ?? '–'}    Søvn (snit): ${sleepAvg ?? '–'}    Træning (snit): ${trainingAvg ?? '–'}`,
+  ]);
+  section(`Træning (${training.length} gennemført i perioden)`, trainingTypes.length ? trainingTypes.map(([t, n]) => `${t}: ${n}`) : ['Ingen træning logget i perioden.']);
+  section('Vægt', [weightLine]);
+  section('Kost-log', [`${meals.length} måltider logget i perioden.`]);
+  section(`Samtaler & noter (${conversations.length} i perioden)`, conversationTypes.length ? conversationTypes.map(([t, n]) => `${t}: ${n}`) : ['Ingen samtaler noteret i perioden.']);
+
+  doc.save(`klientrapport-${client.name.replace(/\s+/g, '_')}.pdf`);
 }
 
 function renderClientCalendar() {
