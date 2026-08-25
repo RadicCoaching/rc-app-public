@@ -7268,6 +7268,15 @@ function renderClientApp(client) {
   clientNav('home');
 }
 
+// Rune: "Jeg kan heller ikke trykke på + i flere milepæle?" — teksten var
+// bare en <div>, intet klik-mål. Ét globalt flag er nok (kun én klient er
+// nogensinde logget ind som klient ad gangen på denne enhed).
+let clientHomeShowAllMilestones = false;
+function toggleClientHomeMilestones() {
+  clientHomeShowAllMilestones = !clientHomeShowAllMilestones;
+  renderClientHome();
+}
+
 function renderClientHome() {
   const clientId = currentUser;
   const client = DATA.clients.find(c => c.id === clientId);
@@ -7312,10 +7321,14 @@ function renderClientHome() {
       if (milestoneCount > 0) {
         const MILESTONE_SHOW_COUNT = 3;
         const keys = Object.keys(client.celebrated || {}).sort((a, b) => b.localeCompare(a));
-        const shown = keys.slice(0, MILESTONE_SHOW_COUNT);
+        const shown = clientHomeShowAllMilestones ? keys : keys.slice(0, MILESTONE_SHOW_COUNT);
         const remaining = keys.length - shown.length;
         const linesHtml = shown.map(k => `<div style="font-size:13px;line-height:1.45">${escapeHtml(describeCelebrationKey(k))}</div>`).join('');
-        const remainingHtml = remaining > 0 ? `<div style="color:var(--gray);font-size:13px;margin-top:2px">+${remaining} flere milepæle</div>` : '';
+        const remainingHtml = remaining > 0
+          ? `<div style="color:var(--gray);font-size:13px;margin-top:2px;text-decoration:underline;cursor:pointer" onclick="toggleClientHomeMilestones()">+${remaining} flere milepæle</div>`
+          : (clientHomeShowAllMilestones && keys.length > MILESTONE_SHOW_COUNT
+            ? `<div style="color:var(--gray);font-size:13px;margin-top:2px;text-decoration:underline;cursor:pointer" onclick="toggleClientHomeMilestones()">Vis færre</div>`
+            : '');
         milestoneHtml = `<div style="margin-top:${weightHtml ? '10px' : '0'}">
           <div style="color:var(--accent);font-weight:700;font-size:14px;margin-bottom:4px">🎉 ${milestoneCount} mål nået undervejs</div>
           ${linesHtml}${remainingHtml}
