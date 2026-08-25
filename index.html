@@ -3542,12 +3542,19 @@ function renderCoachDashboard() {
           trainingBadge = `<span title="Har trænet denne uge" style="font-size:11px;background:var(--border);color:var(--gray);padding:1px 7px;border-radius:10px;margin-left:6px;white-space:nowrap">🏃 Trænet</span>`;
         }
       }
+      // Rune, efter en gennemgang af klient-tracking: "kræver også at jeg
+      // IKKE misser ting" — stille indikator hvis der hverken er logget et
+      // check-in, en gennemført træning eller en samtale/note i et stykke
+      // tid, så ingen klient falder ud af syne uden det bliver opdaget.
+      // Porteret fra rc-mobile samme dag (loadLastContactByClient()).
+      const noContactRow = renderNoContactWarning(c.id);
       return `<div class="client-row" onclick="openClientDetail(${c.id})">
         <div class="client-avatar">${c.name.charAt(0)}</div>
         <div class="client-info">
           <div class="client-name" style="display:flex;align-items:center;flex-wrap:wrap">${c.name}${trainingBadge}</div>
           <div class="client-meta">${meta}</div>
           ${progressRow}
+          ${noContactRow}
         </div>
         <div class="status-dot ${dotClass}"></div>
       </div>`;
@@ -3595,6 +3602,26 @@ function getLastCheckin(clientId) {
 
 function getPendingCheckins(clientId) {
   return DATA.checkins.filter(c => c.clientId === clientId && !c.reply && !c.autoReplied && !c.hiddenForCoach);
+}
+
+const NO_CONTACT_WARNING_DAYS = 10;
+
+// Seneste dato på tværs af check-in, gennemført træning ELLER en
+// samtale/note for denne klient — matcher rc-mobiles loadLastContactByClient().
+function getLastContactDate(clientId) {
+  let latest = null;
+  DATA.checkins.forEach(c => { if (c.clientId === clientId && (!latest || c.date > latest)) latest = c.date; });
+  (DATA.trainingCheckins || []).forEach(t => { if (t.clientId === clientId && (!latest || t.date > latest)) latest = t.date; });
+  (DATA.conversationLogs || []).forEach(l => { if (l.clientId === clientId && (!latest || l.date > latest)) latest = l.date; });
+  return latest;
+}
+
+function renderNoContactWarning(clientId) {
+  const latest = getLastContactDate(clientId);
+  if (!latest) return `<div style="font-size:12px;color:#D9A441;margin-top:5px">⚠ Ingen kontakt registreret endnu</div>`;
+  const days = Math.floor((new Date(todayLocalStr()) - new Date(latest)) / 86400000);
+  if (days < NO_CONTACT_WARNING_DAYS) return '';
+  return `<div style="font-size:12px;color:#D9A441;margin-top:5px">⚠ Ingen kontakt i ${days} dage</div>`;
 }
 
 function avgScore(ci) {
