@@ -574,6 +574,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
       </div>
       <div class="divider"></div>
       <div id="client-home-birthday-banner"></div>
+      <div id="client-home-development"></div>
       <div id="client-home-focus"></div>
       <div id="client-home-booking-banner"></div>
       <div id="client-home-sessions-left"></div>
@@ -7276,6 +7277,41 @@ function renderClientHome() {
           <div style="color:#111;font-weight:800;font-size:15px">🎉 Tillykke med ${age != null ? `de ${age} år` : 'fødselsdagen'}, ${escapeHtml(client.name)}!</div>
         </div>`
       : '';
+  }
+
+  // Rune, efter en gennemgang af klient-tracking: "Lav klient
+  // brugerfladen også" — "Din rejse"-visning: fremgang skal føles
+  // anerkendt (menneskeligt sprog + milepæle), ikke kun rå tal i
+  // Data-fanen. Bevidst kun vist når der reelt ER noget at vise. Bruger
+  // KUN DATA.bodyMetrics (allerede indlæst) — ikke Tanita-scanninger, som
+  // hentes asynkront pr. klient og kun bruges i selve "Krop"-fanens fulde
+  // graf; ville kræve en ekstra gentegnings-runde for et hurtigt
+  // forsiden-overblik. Porteret fra rc-mobile samme dag.
+  const devEl = document.getElementById('client-home-development');
+  if (devEl) {
+    const weightPoints = (DATA.bodyMetrics || [])
+      .filter(m => m.clientId === clientId && m.weight != null)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-8);
+    const milestoneCount = Object.keys(client.celebrated || {}).length;
+    const showWeightLine = client.visibleStats && client.visibleStats.weight && weightPoints.length >= 2;
+    if (showWeightLine || milestoneCount > 0) {
+      let weightHtml = '';
+      if (showWeightLine) {
+        const delta = Math.round((weightPoints[weightPoints.length - 1].weight - weightPoints[0].weight) * 10) / 10;
+        const deltaText = delta === 0 ? 'Din vægt har holdt sig stabil' : `Du har ${delta < 0 ? 'tabt' : 'taget på med'} ${Math.abs(delta)} kg`;
+        weightHtml = `<div style="font-size:15px;line-height:1.4">${deltaText} over de seneste ${weightPoints.length} målinger.</div>`;
+      }
+      const milestoneHtml = milestoneCount > 0
+        ? `<div style="color:var(--accent);font-weight:700;font-size:14px;margin-top:${weightHtml ? '10px' : '0'}">🎉 ${milestoneCount} mål nået undervejs</div>`
+        : '';
+      devEl.innerHTML = `<div class="card" style="margin-bottom:16px">
+        <div class="last-ci-lbl" style="margin-bottom:4px">Din udvikling</div>
+        ${weightHtml}${milestoneHtml}
+      </div>`;
+    } else {
+      devEl.innerHTML = '';
+    }
   }
 
   const focusEl = document.getElementById('client-home-focus');
