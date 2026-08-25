@@ -5503,10 +5503,42 @@ function deleteTimeLog(id) {
   renderTimeLogList();
 }
 
+// Rune: "den skal opdeles så det vises klient for klient under tids fanen" —
+// var én flad, kronologisk liste for ALLE klienter blandet sammen.
+// Grupperet pr. klient nu, med en total pr. klient — matcher rc-mobiles
+// SessionLogScreen.tsx (groupTimeLogsByClient()) 1:1. Poster uden
+// tilknyttet klient (fri administrationstid) samles i egen gruppe til sidst.
+let closedTimeGroups = new Set();
+function toggleTimeGroup(key) {
+  if (closedTimeGroups.has(key)) closedTimeGroups.delete(key);
+  else closedTimeGroups.add(key);
+  renderTimeLogList();
+}
+function groupTimeLogsByClient(logs) {
+  const map = new Map();
+  logs.forEach(l => {
+    const key = l.clientId != null ? String(l.clientId) : '__none__';
+    if (!map.has(key)) {
+      const name = l.clientId != null ? (DATA.clients.find(c => c.id === l.clientId)?.name || 'Ukendt klient') : 'Ikke tilknyttet en klient';
+      map.set(key, { key, name, entries: [], totalMinutes: 0 });
+    }
+    const g = map.get(key);
+    g.entries.push(l);
+    g.totalMinutes += (l.minutes || 0);
+  });
+  const groups = [...map.values()];
+  groups.forEach(g => g.entries.sort((a, b) => b.date.localeCompare(a.date)));
+  groups.sort((a, b) => {
+    if (a.key === '__none__') return 1;
+    if (b.key === '__none__') return -1;
+    return a.name.localeCompare(b.name, 'da');
+  });
+  return groups;
+}
+
 function renderTimeLogList() {
   const el = document.getElementById('time-log-list');
   if (!el) return;
-  const logs = [...DATA.timeLogs].sort((a, b) => b.date.localeCompare(a.date));
 
   const summaryEl = document.getElementById('time-log-month-summary');
   if (summaryEl) {
@@ -5520,16 +5552,25 @@ function renderTimeLogList() {
     </div>`;
   }
 
-  if (!logs.length) { el.innerHTML = '<div class="empty"><span class="empty-icon">⏱️</span><p>Ingen tid logget endnu</p></div>'; return; }
-  el.innerHTML = logs.map(l => {
-    const client = l.clientId ? DATA.clients.find(c => c.id === l.clientId) : null;
-    return `<div class="card" style="margin-bottom:8px">
+  if (!DATA.timeLogs.length) { el.innerHTML = '<div class="empty"><span class="empty-icon">⏱️</span><p>Ingen tid logget endnu</p></div>'; return; }
+
+  el.innerHTML = groupTimeLogsByClient(DATA.timeLogs).map(g => {
+    const isOpen = !closedTimeGroups.has(g.key);
+    const entriesHtml = isOpen ? g.entries.map(l => `<div class="card" style="margin-bottom:8px">
       <div class="row-header" style="margin-bottom:6px">
-        <div class="row-header-label"><div class="card-sub" style="margin:0">${l.date}${client ? ' · ' + escapeHtml(client.name) : ''}</div></div>
+        <div class="row-header-label"><div class="card-sub" style="margin:0">${l.date}</div></div>
         <button class="btn-icon" onclick="deleteTimeLog(${l.id})">✕</button>
       </div>
       <div>${escapeHtml(l.type || 'Andet')} — ${l.minutes} min</div>
       ${l.note ? `<div class="card-sub" style="margin-top:6px">${escapeHtml(l.note)}</div>` : ''}
+    </div>`).join('') : '';
+    return `<div style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0" onclick="toggleTimeGroup('${g.key}')">
+        <span style="font-size:12px;color:var(--gray)">${isOpen ? '▾' : '▸'}</span>
+        <strong style="font-size:15px;flex:1">${escapeHtml(g.name)}</strong>
+        <span style="color:var(--accent);font-weight:700;font-size:13px">${Math.round(g.totalMinutes / 60 * 10) / 10} t (${g.totalMinutes} min)</span>
+      </div>
+      ${entriesHtml}
     </div>`;
   }).join('');
 }
