@@ -12,7 +12,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  /* Canvas black — deepest layer, matches rcperformance.dk */
+  /* Canvas black — deepest layer, matches radichcoaching.dk */
   --black:#0C0C0C;
   /* Vintage Black / Grey 900 — designer's brand file, used for topbar/nav */
   --dark:#1F1F1F;
@@ -267,7 +267,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 <!-- ══════════════ LOGIN ══════════════ -->
 <div id="screen-login" class="screen active">
   <div class="login-logo">RC.</div>
-  <div class="login-sub">RC Performance</div>
+  <div class="login-sub">Radich Coaching</div>
 
   <div id="login-step-code">
     <div class="pin-label" id="pin-label">Indtast din kode</div>
@@ -570,7 +570,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
     <div class="content">
       <div class="client-welcome">
         <div class="client-welcome-name" id="client-welcome-name"></div>
-        <div class="client-welcome-sub">RC Performance</div>
+        <div class="client-welcome-sub">Radich Coaching</div>
       </div>
       <div class="divider"></div>
       <div id="client-home-birthday-banner"></div>
@@ -4980,15 +4980,14 @@ function slotToICSEvent(slot, client) {
     'END:VEVENT'].filter(Boolean).join('\r\n');
 }
 
-// Rebrand (2026-08-26, Radich Coaching → RC Performance): PRODID er ren
-// metadata, sikkert at ændre. UID-suffikset "@radichcoaching.dk" ovenfor
-// (slotToICSEvent/appointmentToICSEvent) er BEVIDST IKKE ændret — bruges
-// til at genkende/opdatere en allerede-downloadet begivenhed; et skift ville
-// få en re-download af en tidligere hentet .ics-fil til at oprette et
-// duplikat i kalenderen i stedet for at opdatere den. Samme beslutning som
-// rc-mobiles lib/ics.ts.
+// Rebrand (besluttet 2026-08-26, IKKE aktiveret endnu — Rune: "skal jo
+// kunne rette lige indtil det sidste", venter til domæne/CVR/e-mail er
+// klar OG det endelige navn er fastlagt). UID-suffikset
+// "@radichcoaching.dk" (slotToICSEvent/appointmentToICSEvent) skal BEVIDST
+// IKKE ændres når det aktiveres — bruges til at genkende/opdatere en
+// allerede-downloadet begivenhed; et skift ville skabe dubletter.
 function wrapICS(eventsArr) {
-  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//RC Performance//Booking//DA', ...eventsArr, 'END:VCALENDAR'].join('\r\n');
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Radich Coaching//Booking//DA', ...eventsArr, 'END:VCALENDAR'].join('\r\n');
 }
 
 function downloadICSFile(filename, content) {
