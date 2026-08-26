@@ -5391,12 +5391,21 @@ function libraryTopAction() {
 // ══════════════════════════════════════
 let currentLogsSubtab = 'conversations';
 
+// Rune: "Manger tidsregistreringer i web versionen ifht klienter og mit
+// tidsforbrug" — root cause: denne funktion skiftede kun synligheden på
+// panelerne, men gen-tegnede ALDRIG selve listen. Begge lister blev kun
+// tegnet ÉN gang (i coachLibrarySubtab() ovenfor, ved allerførste klik ind
+// på "Samtaler & Tid"), ofte før DATA.timeLogs var færdig-hentet fra
+// Supabase — så "Tid"-fanen kunne stå tom eller forældet resten af
+// sessionen, uanset hvor mange gange man klikkede frem og tilbage.
 function logsSubtab(tab) {
   currentLogsSubtab = tab;
   document.getElementById('logs-subtab-conversations').classList.toggle('active', tab === 'conversations');
   document.getElementById('logs-subtab-time').classList.toggle('active', tab === 'time');
   document.getElementById('logs-conversations-panel').style.display = tab === 'conversations' ? 'block' : 'none';
   document.getElementById('logs-time-panel').style.display = tab === 'time' ? 'block' : 'none';
+  if (tab === 'conversations') renderConversationLogList();
+  else renderTimeLogList();
 }
 
 function clientOptionsHtml(selectedId) {
@@ -6200,6 +6209,32 @@ function renderDetailHistory(clientId) {
     { key: 'samtale', label: '💬 Samtaler & noter', items: cls },
   ];
 
+  // Rune: "Logs til kost ligger bare hulter til bulter?... skal deles op i
+  // dage og uger" — gjaldt her på coachens klient-detalje/Historik-side
+  // (renderDetailHistory), en HELT ANDEN visning end klientens egen
+  // "Kost"-fane (renderClientMealHistory, allerede rettet tidligere) — denne
+  // sektion sorterede kun på DATO (ikke tid), og grupperede slet ikke i
+  // uger/dage. Kun Kost-log-sektionen får den særlige uge/dag-gruppering
+  // (matcher renderClientMealHistory og rc-mobiles mealGrouping.ts) —
+  // Check-ins/Træning/Samtaler forbliver flade lister, som allerede fungerer.
+  function renderMealSectionBody(items) {
+    const byDate = {};
+    items.forEach(it => { (byDate[it.date] = byDate[it.date] || []).push(it.data); });
+    const days = Object.keys(byDate)
+      .map(date => ({ date, meals: byDate[date].slice().sort((a, b) => (a.time || '').localeCompare(b.time || '')) }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const byWeek = {};
+    days.forEach(day => { const wk = getMondayOf(day.date); (byWeek[wk] = byWeek[wk] || []).push(day); });
+    const weeks = Object.keys(byWeek).map(weekKey => ({ weekKey, days: byWeek[weekKey] })).sort((a, b) => b.weekKey.localeCompare(a.weekKey));
+    return weeks.map(week => {
+      const weekHtml = week.days.map(day =>
+        `<div class="card-sub" style="font-weight:700;margin:8px 0 4px">${MEAL_DAY_NAMES[new Date(day.date + 'T12:00:00').getDay()]} ${day.date}</div>`
+        + day.meals.map(m => renderItem({ kind: 'meal', data: m })).join('')
+      ).join('');
+      return `<div class="card-sub" style="color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 2px">${formatMealWeekHeading(week.weekKey)}</div>${weekHtml}`;
+    }).join('');
+  }
+
   el.innerHTML = widget + sections.filter(s => s.items.length).map(sec => {
     const isOpen = openHistoryGroups.has(sec.key);
     const sorted = sec.items.slice().sort((a, b) => b.date.localeCompare(a.date));
@@ -6211,7 +6246,7 @@ function renderDetailHistory(clientId) {
       </div>
       ${isOpen ? `<div style="padding:0 14px 12px">
         ${sec.key === 'samtale' ? `<button class="btn btn-sm btn-primary btn-block" style="margin-bottom:10px" onclick="openConversationLogModal(${clientId})">+ Ny samtale</button>` : ''}
-        ${sorted.map(renderItem).join('')}
+        ${sec.key === 'meal' ? renderMealSectionBody(sec.items) : sorted.map(renderItem).join('')}
       </div>` : ''}
     </div>`;
   }).join('');
