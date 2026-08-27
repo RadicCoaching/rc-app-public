@@ -10243,6 +10243,14 @@ function exportMealLogPdf(clientId) {
   y += 24;
   doc.setTextColor(0);
 
+  // Rune: "der er ingen billeder med når jeg trækker kost log ud, den SKAL
+  // med" — fejlen i addImage/getImageProperties blev tidligere kun logget
+  // til browser-konsollen (console.error), usynligt for Rune, som ikke selv
+  // kan/skal åbne dev-tools. Tæller nu fejl op og fortæller det tydeligt
+  // efter eksport i stedet for at fejle stille.
+  let withPhoto = 0, photoOk = 0, photoFailed = 0;
+  const failReasons = [];
+
   logs.forEach(entry => {
     const imgMaxH = 160;
     const neededHeight = 60 + (entry.photo ? imgMaxH + 10 : 0);
@@ -10259,15 +10267,24 @@ function exportMealLogPdf(clientId) {
     y += noteLines.length * 14 + 6;
 
     if (entry.photo) {
-      try {
-        const props = doc.getImageProperties(entry.photo);
-        let w = props.width, h = props.height;
-        const scale = Math.min((pageW - margin * 2) / w, imgMaxH / h, 1);
-        w *= scale; h *= scale;
-        doc.addImage(entry.photo, 'JPEG', margin, y, w, h);
-        y += h + 16;
-      } catch (e) {
-        console.error('Kunne ikke tilføje billede til PDF', e);
+      withPhoto++;
+      if (!entry.photo.startsWith('data:image')) {
+        photoFailed++;
+        failReasons.push(`${fmtDate(entry.date)} ${entry.mealType}: billedet er ikke gemt som et rigtigt billede (starter med "${entry.photo.slice(0, 20)}...")`);
+      } else {
+        try {
+          const props = doc.getImageProperties(entry.photo);
+          let w = props.width, h = props.height;
+          const scale = Math.min((pageW - margin * 2) / w, imgMaxH / h, 1);
+          w *= scale; h *= scale;
+          doc.addImage(entry.photo, 'JPEG', margin, y, w, h);
+          y += h + 16;
+          photoOk++;
+        } catch (e) {
+          photoFailed++;
+          failReasons.push(`${fmtDate(entry.date)} ${entry.mealType}: ${e && e.message ? e.message : e}`);
+          console.error('Kunne ikke tilføje billede til PDF', entry, e);
+        }
       }
     }
     y += 8;
@@ -10277,6 +10294,15 @@ function exportMealLogPdf(clientId) {
   });
 
   doc.save(`kostlog-${client.name.replace(/\s+/g, '_')}.pdf`);
+
+  if (photoFailed > 0) {
+    const preview = failReasons.slice(0, 3).join('\n');
+    alert(`OBS: ${photoFailed} af ${withPhoto} billeder kunne IKKE komme med i PDF'en (resten af teksten er der).\n\n${preview}${failReasons.length > 3 ? `\n...og ${failReasons.length - 3} mere` : ''}`);
+  } else if (withPhoto === 0) {
+    showToast('OBS: ingen af disse måltider har et gemt billede');
+  } else {
+    showToast(`✅ PDF eksporteret med alle ${photoOk} billeder`);
+  }
 }
 
 // Rune, efter en gennemgang af klient-tracking: "byg export analyse ideen"
