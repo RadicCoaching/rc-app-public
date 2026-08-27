@@ -6371,7 +6371,7 @@ function renderDetailProgram(clientId) {
         }
         const ex = (DATA.exerciseLibrary || []).find(e => e.id === b.libraryId);
         const name = ex ? ex.name : '(slettet øvelse)';
-        const weight = latestWeightFor(p, b.libraryId);
+        const weight = latestWeightFor(clientId, b.libraryId);
         const hasNote = !!(b.note && b.note.trim());
         return `<div class="exercise-row-tap" style="cursor:default">
           <div style="min-width:0;flex:1;cursor:pointer" onclick="openExerciseDetail(${p.id}, ${b.libraryId}, ${clientId})">
@@ -7724,7 +7724,7 @@ function renderClientProgramDetail(program, el) {
     } else {
       const ex = (DATA.exerciseLibrary || []).find(e => e.id === b.libraryId);
       const name = ex ? ex.name : '(slettet øvelse)';
-      const weight = latestWeightFor(program, b.libraryId);
+      const weight = latestWeightFor(currentUser, b.libraryId);
       html += `<div class="exercise-row-tap" onclick="openExerciseDetail(${program.id}, ${b.libraryId})">
         <div style="min-width:0;flex:1">
           <div class="exercise-row-name">${escapeHtml(name)}${b.ss ? `<span class="ss-tag">${escapeHtml(b.ss)}</span>` : ''}</div>
@@ -7737,8 +7737,24 @@ function renderClientProgramDetail(program, el) {
   el.innerHTML = html;
 }
 
-function latestWeightFor(program, key) {
-  const logs = (program.weightLogs && program.weightLogs[key]) || [];
+// Rune: "flere øvelser for registreringer ser ud til at forsvinde fra gang
+// til gang" — root cause: vægt-log var scoped til DET ENKELTE program, ikke
+// til klienten+øvelsen på tværs af programmer. Data var aldrig tabt, bare
+// usynlig efter et nyt/opdateret program blev oprettet og genbrugte samme
+// øvelse. Slår nu op på tværs af ALLE klientens programmer (samme rettelse
+// portet til rc-mobile samme dag, se dets CHANGELOG.md).
+function allWeightLogsFor(clientId, key) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  if (!client) return [];
+  const entries = [];
+  (client.programs || []).forEach(p => {
+    ((p.weightLogs && p.weightLogs[key]) || []).forEach(e => entries.push({ ...e, _programId: p.id }));
+  });
+  return entries;
+}
+
+function latestWeightFor(clientId, key) {
+  const logs = allWeightLogsFor(clientId, key);
   if (!logs.length) return '';
   return logs.slice().sort((a,b) => a.date.localeCompare(b.date)).pop().weight;
 }
@@ -7876,20 +7892,21 @@ function deleteBodyMetric(id, clientId, panelId) {
 }
 
 function renderExerciseWeightHistory() {
-  const client = DATA.clients.find(c => c.id === currentExerciseDetail.clientId);
-  const program = client.programs.find(p => p.id === currentExerciseDetail.programId);
   const key = currentExerciseDetail.libraryId;
-  const logs = ((program.weightLogs && program.weightLogs[key]) || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const logs = allWeightLogsFor(currentExerciseDetail.clientId, key).sort((a, b) => b.date.localeCompare(a.date));
   const el = document.getElementById('ex-detail-history');
   if (!logs.length) { el.innerHTML = ''; return; }
   const visibleLogs = logs.slice(0, EX_HISTORY_VISIBLE_COUNT);
   const hiddenCount = logs.length - visibleLogs.length;
+  // e._programId (sat af allWeightLogsFor) — en måling kan stamme fra et
+  // ANDET program end det der lige nu er åbent, så sletning skal ramme det
+  // program den faktisk hører til, ikke nødvendigvis currentExerciseDetail.programId.
   const rowHtml = e => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
         <span style="font-size:13px">${fmtShortDate(e.date)}</span>
         <span style="display:flex;align-items:center;gap:10px">
           <span style="font-weight:700;color:var(--accent)">${formatWeightDisplay(e.weight)}</span>
-          <button class="btn-icon" onclick="deleteExerciseWeightEntry(${currentExerciseDetail.clientId}, ${currentExerciseDetail.programId}, ${key}, ${e.id})">✕</button>
+          <button class="btn-icon" onclick="deleteExerciseWeightEntry(${currentExerciseDetail.clientId}, ${e._programId}, ${key}, ${e.id})">✕</button>
         </span>
       </div>`;
   el.innerHTML = `<div class="card-sub" style="margin:4px 0 6px">Tidligere målinger</div>` +
@@ -7919,7 +7936,7 @@ function openExerciseDetail(programId, libraryId, clientId) {
   document.getElementById('ex-detail-photo-input').value = '';
   renderExercisePhoto(client, ex);
   renderExerciseVideo(ex);
-  const lastRaw = latestWeightFor(program, libraryId);
+  const lastRaw = latestWeightFor(clientId, libraryId);
   const parsed = parseWeightEntry(lastRaw);
   exSetWeightMode(parsed.mode);
   if (parsed.mode !== 'bw') document.getElementById('ex-detail-weight-input').value = parsed.value;
@@ -8627,12 +8644,21 @@ function renderProgressOevelser(clientId, panelId) {
   const isCoach = panelId.indexOf('coach-') === 0;
   const programs = client.programs || [];
 
+  // Rune: "flere øvelser for registreringer ser ud til at forsvinde fra
+  // gang til gang" — grafen byggede tidligere ÉT dropdown-punkt PR. PROGRAM
+  // en øvelse indgik i, så "Biceps Curls" i et nyt program fremstod som en
+  // helt ny, tom graf, selvom den gamle udvikling lå gemt under et andet
+  // program. Dedupliker nu pr. øvelse (key) på tværs af alle programmer —
+  // samme rettelse som allWeightLogsFor() ovenfor.
   const options = [];
+  const seenKeys = new Set();
   programs.forEach(p => {
     Object.keys(p.weightLogs || {}).forEach(key => {
+      if (seenKeys.has(key)) return;
       if ((p.weightLogs[key] || []).length) {
+        seenKeys.add(key);
         const ex = (DATA.exerciseLibrary || []).find(e => String(e.id) === String(key));
-        options.push({ kind: 'exercise', programId: p.id, key, label: `${p.name} — ${ex ? ex.name : '(slettet øvelse)'}` });
+        options.push({ kind: 'exercise', key, label: ex ? ex.name : '(slettet øvelse)' });
       }
     });
   });
@@ -8659,8 +8685,7 @@ function renderProgressOevelser(clientId, panelId) {
     return;
   }
 
-  const program = programs.find(p => p.id === selected.programId);
-  const logs = (program.weightLogs[selected.key] || []).slice().sort((a,b) => a.date.localeCompare(b.date));
+  const logs = allWeightLogsFor(clientId, selected.key).sort((a,b) => a.date.localeCompare(b.date));
   // "BW" (kropsvægt) kan ikke plottes som et tal — de målinger springes over i
   // selve grafen, men ses stadig i historikken under Program-fanen.
   // Dansk komma som decimaltegn normaliseres FØR parseFloat — ellers stopper
