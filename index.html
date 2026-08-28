@@ -1905,7 +1905,8 @@ async function pushToSupabase() {
         focus_overall: c.focusOverall || '',
         focus_current: c.focusCurrent || '',
         notes: c.notes || '', auto_reply: c.autoReply || '',
-        warmup: c.warmup || null
+        warmup: c.warmup || null,
+        data_retention_until: c.dataRetentionUntil || null
       })));
     }
   });
@@ -2360,6 +2361,7 @@ async function refreshFromSupabase() {
       },
       notes: c.notes || '', autoReply: c.auto_reply || '',
       warmup: c.warmup || null,
+      dataRetentionUntil: c.data_retention_until || null,
       exercisePhotos: photosByClient[c.id] || {},
       programs: programsByClient[c.id] || []
     }));
@@ -3549,6 +3551,7 @@ function renderCoachDashboard() {
       // tid, så ingen klient falder ud af syne uden det bliver opdaget.
       // Porteret fra rc-mobile samme dag (loadLastContactByClient()).
       const noContactRow = renderNoContactWarning(c.id);
+      const retentionRow = renderRetentionWarning(c.id);
       return `<div class="client-row" onclick="openClientDetail(${c.id})">
         <div class="client-avatar">${c.name.charAt(0)}</div>
         <div class="client-info">
@@ -3556,6 +3559,7 @@ function renderCoachDashboard() {
           <div class="client-meta">${meta}</div>
           ${progressRow}
           ${noContactRow}
+          ${retentionRow}
         </div>
         <div class="status-dot ${dotClass}"></div>
       </div>`;
@@ -3623,6 +3627,17 @@ function renderNoContactWarning(clientId) {
   const days = Math.floor((new Date(todayLocalStr()) - new Date(latest)) / 86400000);
   if (days < NO_CONTACT_WARNING_DAYS) return '';
   return `<div style="font-size:12px;color:#D9A441;margin-top:5px">⚠ Ingen kontakt i ${days} dage</div>`;
+}
+
+// Rune: "kan jeg lave en funktion hvor jeg sætter de '3 måneder i gang'...
+// så jeg altid kan huske alle klienters slutdato" — vises altid når fristen
+// er sat (ikke kun i sidste øjeblik, som ⚠ Ingen kontakt-varslen ovenfor).
+function renderRetentionWarning(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  if (!client || !client.dataRetentionUntil) return '';
+  const daysLeft = Math.ceil((new Date(client.dataRetentionUntil) - new Date(todayLocalStr())) / 86400000);
+  if (daysLeft <= 0) return `<div style="font-size:12px;color:#D9A441;margin-top:5px">⏳ Pilotfrist udløbet (${client.dataRetentionUntil})</div>`;
+  return `<div style="font-size:12px;color:var(--gray);margin-top:5px">⏳ Pilotfrist: ${client.dataRetentionUntil} (${daysLeft} dage)</div>`;
 }
 
 function avgScore(ci) {
@@ -7049,6 +7064,15 @@ function renderDetailSettings(clientId) {
     </div>
     <div class="divider"></div>
     <div class="card" style="margin-bottom:16px">
+      <div class="card-title" style="margin-bottom:2px">⏳ Pilot-/dataopbevaringsfrist</div>
+      ${client.dataRetentionUntil
+        ? `<div class="card-sub" style="margin-bottom:12px">Slutter d. ${escapeHtml(client.dataRetentionUntil)}</div>
+           <button class="btn btn-block" onclick="resetRetention(${clientId})">Nulstil (klienten fortsætter)</button>`
+        : `<div class="card-sub" style="margin-bottom:12px">Ingen frist sat — klienten er en normal, fortsættende klient.</div>
+           <button class="btn btn-primary btn-block" onclick="startRetention(${clientId})">Start 3-måneders frist</button>`}
+    </div>
+    <div class="divider"></div>
+    <div class="card" style="margin-bottom:16px">
       <div class="card-title" style="margin-bottom:2px">Hvad kan klienten selv se?</div>
       <div class="card-sub" style="margin-bottom:12px">Som udgangspunkt slukket for det hele — klienten kan altid taste oplysninger ind, uanset disse valg.</div>
       <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
@@ -7147,6 +7171,27 @@ function saveClientSettings(clientId) {
   document.getElementById('detail-client-name').textContent = client.name;
   document.getElementById('detail-client-pin').textContent = clientLoginStatusLabel(client);
   showToast('Gemt');
+}
+
+// Pilot-/dataopbevaringsfrist (Rune, 2026-08-28): "sætter de '3 måneder i
+// gang'... appen huske mig på når de er gået, og jeg kan resette hvis
+// klienten køber en træning." Samme funktion portet til rc-mobile samme dag.
+function startRetention(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  const target = new Date();
+  target.setMonth(target.getMonth() + 3);
+  client.dataRetentionUntil = toLocalDateStr(target);
+  save();
+  renderDetailSettings(clientId);
+  showToast('Frist sat');
+}
+
+function resetRetention(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  client.dataRetentionUntil = null;
+  save();
+  renderDetailSettings(clientId);
+  showToast('Frist nulstillet');
 }
 
 function deleteClient(clientId) {
