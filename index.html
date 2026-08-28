@@ -1384,8 +1384,17 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
   <div class="modal">
     <div class="modal-title" id="modal-coach-task-title">Ny opgave</div>
     <div class="field"><label>Opgave</label><input type="text" id="ct-title" placeholder="fx Ring til klient om ugens træning"></div>
-    <div class="field"><label>Ugedag</label>
+    <div class="field" style="display:flex;gap:8px">
+      <button class="btn btn-sm" id="ct-mode-day" style="flex:1" onclick="ctSetMode('day')">Ugedag (gentages)</button>
+      <button class="btn btn-sm" id="ct-mode-date" style="flex:1" onclick="ctSetMode('date')">Bestemt dato</button>
+    </div>
+    <div class="field" id="ct-day-wrap"><label>Ugedag</label>
       <select id="ct-day"></select>
+    </div>
+    <div class="field" id="ct-date-wrap" style="display:none">
+      <label>Dato</label>
+      <input type="date" id="ct-date">
+      <div class="card-sub" style="margin-top:6px">Du får en påmindelse (push-notifikation) på selve dagen, og opgaven vises tydeligt under "Dine opgaver" indtil du sletter den.</div>
     </div>
     <div class="field"><label>Klient (valgfrit)</label>
       <select id="ct-client"><option value="">Ingen klient</option></select>
@@ -2131,7 +2140,7 @@ async function pushToSupabase() {
   await section('coach_tasks', async () => {
     if (DATA.coachTasks && DATA.coachTasks.length) {
       await sb.from('coach_tasks').upsert(DATA.coachTasks.map(t => ({
-        id: t.id, client_id: t.clientId || null, title: t.title, day_of_week: t.dayOfWeek
+        id: t.id, client_id: t.clientId || null, title: t.title, day_of_week: t.dayOfWeek ?? null, due_date: t.dueDate || null
       })));
     }
     if (pendingDeletes.coachTasks.size) {
@@ -2390,7 +2399,7 @@ async function refreshFromSupabase() {
       trainingCheckins: (tcRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo: t.photo_url || '', runLogId: t.run_log_id || null, coachSeen: !!t.coach_seen, snoozedUntil: t.snoozed_until || null, reply: t.reply || '' })),
       mealLogs: (mlRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, time: m.time || '', mealType: m.meal_type, note: m.note || '', photo: m.photo_url || '' })),
       sessionCredits: (scRes.data || []).map(s => ({ id: s.id, clientId: s.client_id, date: s.date, type: s.type, delta: s.delta, note: s.note || '' })),
-      coachTasks: (ctRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, title: t.title, dayOfWeek: t.day_of_week })),
+      coachTasks: (ctRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, title: t.title, dayOfWeek: t.day_of_week, dueDate: t.due_date || null })),
       conversationLogs: (convRes.data || []).map(l => ({ id: l.id, date: l.date, clientId: l.client_id, type: l.type || null, content: l.content || '', thoughts: l.thoughts || '', nextStep: l.next_step || '' })),
       timeLogs: (timeLogRes.data || []).map(l => ({ id: l.id, date: l.date, clientId: l.client_id, type: l.type || null, minutes: l.minutes || 0, note: l.note || '' })),
       bookingSlots: (bookingRes.data || []).map(s => ({
@@ -9354,25 +9363,40 @@ function toggleCoachTasksRest() {
   coachTasksRestExpanded = true;
   renderCoachTasksSection();
 }
+// Rune: "vil gerne at 'mine opgaver' kan tilskrives en bestemt dato også?
+// Feks Johanne skal jeg planlægge en løbetur efter en bestemt dato" —
+// opgaver kan nu ENTEN gentages ugentligt (dayOfWeek) ELLER have en
+// bestemt, engangs-dato (dueDate), aldrig begge. En forfalden/dagens
+// dato-opgave tælles med i "I DAG"-bunken ligesom en ugedags-opgave der
+// rammer i dag, så den ikke bliver væk hvis hun ikke lige når den samme
+// dag. Se send-push/index.ts's "task_reminder_check" for selve
+// push-notifikationen (kaldt af en daglig pg_cron-job).
 function renderCoachTasksSection() {
   const el = document.getElementById('coach-tasks-section');
   if (!el) return;
   const todayDow = new Date().getDay();
+  const todayStr = todayLocalStr();
   const tasks = DATA.coachTasks || [];
-  const today = tasks.filter(t => t.dayOfWeek === todayDow);
-  const rest = tasks.filter(t => t.dayOfWeek !== todayDow).sort((a, b) => a.dayOfWeek - b.dayOfWeek);
+  const isDueTodayOrOverdue = t => t.dueDate && t.dueDate <= todayStr;
+  const today = tasks.filter(t => t.dayOfWeek === todayDow || isDueTodayOrOverdue(t));
+  const rest = tasks.filter(t => !(t.dayOfWeek === todayDow) && !isDueTodayOrOverdue(t))
+    .sort((a, b) => {
+      const keyOf = t => t.dueDate ? (new Date(t.dueDate) - new Date(todayStr)) / 86400000 : (t.dayOfWeek - todayDow + 7) % 7;
+      return keyOf(a) - keyOf(b);
+    });
   const clientName = id => { const c = DATA.clients.find(c => c.id === id); return c ? c.name : '?'; };
+  const taskLabel = t => t.dueDate ? fmtDate(t.dueDate) : WEEKDAY_LABELS[t.dayOfWeek];
 
   const rowsHtml = today.map(t => `
     <div class="card" style="margin-bottom:6px;background:var(--accent);display:flex;justify-content:space-between;align-items:center">
-      <div style="color:#111;font-weight:700;font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">I DAG — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
+      <div style="color:#111;font-weight:700;font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">${t.dueDate ? '📅' : 'I DAG'} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
       <button class="btn-icon" style="color:#111" onclick="event.stopPropagation(); deleteCoachTask(${t.id})">×</button>
     </div>`).join('') + (coachTasksRestExpanded ? rest.map(t => `
     <div class="card" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">${WEEKDAY_LABELS[t.dayOfWeek]} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
+      <div style="font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">${t.dueDate ? '📅 ' : ''}${taskLabel(t)} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
       <button class="btn-icon" onclick="event.stopPropagation(); deleteCoachTask(${t.id})">×</button>
     </div>`).join('') : (rest.length
-      ? `<div class="card-sub" style="text-align:center;cursor:pointer;color:var(--accent)" onclick="toggleCoachTasksRest()">Vis resten af ugens opgaver (${rest.length})</div>`
+      ? `<div class="card-sub" style="text-align:center;cursor:pointer;color:var(--accent)" onclick="toggleCoachTasksRest()">Vis resten af opgaverne (${rest.length})</div>`
       : ''));
 
   el.innerHTML = `
@@ -9389,6 +9413,15 @@ function renderCoachTasksSection() {
 // ny række), ingen måde at redigere en eksisterende. editingCoachTaskId
 // styrer om saveCoachTask() opdaterer i stedet for at oprette.
 let editingCoachTaskId = null;
+let ctMode = 'day';
+
+function ctSetMode(mode) {
+  ctMode = mode;
+  document.getElementById('ct-mode-day').classList.toggle('btn-primary', mode === 'day');
+  document.getElementById('ct-mode-date').classList.toggle('btn-primary', mode === 'date');
+  document.getElementById('ct-day-wrap').style.display = mode === 'day' ? 'block' : 'none';
+  document.getElementById('ct-date-wrap').style.display = mode === 'date' ? 'block' : 'none';
+}
 
 function openAddCoachTask() {
   editingCoachTaskId = null;
@@ -9396,8 +9429,10 @@ function openAddCoachTask() {
   document.getElementById('ct-title').value = '';
   document.getElementById('ct-day').innerHTML = WEEKDAY_LABELS
     .map((l, i) => `<option value="${i}" ${i === new Date().getDay() ? 'selected' : ''}>${l}</option>`).join('');
+  document.getElementById('ct-date').value = todayLocalStr();
   document.getElementById('ct-client').innerHTML = '<option value="">Ingen klient</option>' +
     DATA.clients.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  ctSetMode('day');
   document.getElementById('modal-coach-task').classList.add('open');
 }
 
@@ -9408,9 +9443,11 @@ function openEditCoachTask(id) {
   document.getElementById('modal-coach-task-title').textContent = 'Redigér opgave';
   document.getElementById('ct-title').value = task.title;
   document.getElementById('ct-day').innerHTML = WEEKDAY_LABELS
-    .map((l, i) => `<option value="${i}" ${i === task.dayOfWeek ? 'selected' : ''}>${l}</option>`).join('');
+    .map((l, i) => `<option value="${i}" ${i === (task.dayOfWeek ?? new Date().getDay()) ? 'selected' : ''}>${l}</option>`).join('');
+  document.getElementById('ct-date').value = task.dueDate || todayLocalStr();
   document.getElementById('ct-client').innerHTML = '<option value="">Ingen klient</option>' +
     DATA.clients.map(c => `<option value="${c.id}" ${c.id === task.clientId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+  ctSetMode(task.dueDate ? 'date' : 'day');
   document.getElementById('modal-coach-task').classList.add('open');
 }
 
@@ -9418,14 +9455,19 @@ function saveCoachTask() {
   const title = document.getElementById('ct-title').value.trim();
   if (!title) { alert('Skriv en opgave først'); return; }
   const day = parseInt(document.getElementById('ct-day').value, 10);
+  const dueDate = document.getElementById('ct-date').value || null;
+  if (ctMode === 'date' && !dueDate) { alert('Vælg en dato først'); return; }
   const clientVal = document.getElementById('ct-client').value;
   const clientId = clientVal ? parseInt(clientVal, 10) : null;
   if (!DATA.coachTasks) DATA.coachTasks = [];
+  const fields = ctMode === 'date'
+    ? { title, dayOfWeek: null, dueDate, clientId }
+    : { title, dayOfWeek: day, dueDate: null, clientId };
   if (editingCoachTaskId != null) {
     const task = DATA.coachTasks.find(t => t.id === editingCoachTaskId);
-    if (task) { task.title = title; task.dayOfWeek = day; task.clientId = clientId; }
+    if (task) Object.assign(task, fields);
   } else {
-    DATA.coachTasks.push({ id: genId(), clientId, title, dayOfWeek: day });
+    DATA.coachTasks.push({ id: genId(), ...fields });
   }
   editingCoachTaskId = null;
   save();
