@@ -85,6 +85,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 
 /* ── CLIENT ROW ── */
 .client-row{display:flex;align-items:center;gap:14px;padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;background:var(--card)}
+.client-row:hover{background:rgba(196,245,1,.03)}
 .client-row:first-child{border-radius:var(--radius) var(--radius) 0 0}
 .client-row:last-child{border-bottom:none;border-radius:0 0 var(--radius) var(--radius)}
 .client-row:only-child{border-radius:var(--radius)}
@@ -139,8 +140,10 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 
 /* ── PROGRAM LIST & EXERCISE WEIGHT ── */
 .program-card{cursor:pointer;transition:border-color .15s,background .15s}
+.program-card:hover{background:#232323;border-color:#3d3d3d}
 .program-card:active{background:#252525;border-color:var(--accent)}
 .exercise-row-tap{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:border-color .15s,background .15s}
+.exercise-row-tap:hover{background:#2b2b2b;border-color:#3d3d3d}
 .exercise-row-tap:active{background:#2E2E2E;border-color:var(--accent)}
 .exercise-row-name{font-size:18px;font-weight:600}
 .exercise-row-sets{font-size:15px;color:var(--gray);margin-top:2px}
@@ -160,7 +163,10 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 /* ── BUTTONS ── */
 .btn{padding:11px 20px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--card);color:var(--white);font-family:'Inter',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:8px}
 .btn:active{opacity:.7}
+.btn:hover{border-color:var(--gray)}
 .btn-primary{background:var(--accent);color:var(--black);border-color:var(--accent)}
+.btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);transform:translateY(-1px);box-shadow:0 8px 20px -8px rgba(196,245,1,.5)}
+.btn-primary:active{transform:translateY(0)}
 .btn-danger{color:var(--danger);border-color:rgba(255,82,82,.3)}
 .btn-block{width:100%;justify-content:center}
 .btn-sm{padding:7px 14px;font-size:13px}
@@ -218,10 +224,22 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 
 /* ── MODALS ── */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;overflow:hidden;padding:24px 16px}
-.modal-overlay.open{display:flex;align-items:flex-end}
-.modal{background:var(--dark);border:1px solid var(--border);border-radius:var(--radius) var(--radius) 0 0;width:100%;max-width:500px;margin:0 auto;padding:24px;max-height:85vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.modal-overlay.open{display:flex;align-items:flex-end;animation:modalOverlayFadeIn .18s ease}
+.modal{background:var(--dark);border:1px solid var(--border);border-radius:var(--radius) var(--radius) 0 0;width:100%;max-width:500px;margin:0 auto;padding:24px;max-height:85vh;overflow-y:auto;-webkit-overflow-scrolling:touch;animation:modalSlideUp .28s cubic-bezier(.16,1,.3,1)}
+@keyframes modalOverlayFadeIn{from{opacity:0}to{opacity:1}}
+@keyframes modalSlideUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
 .modal-title{font-family:'Inter',sans-serif;font-weight:700;font-size:22px;letter-spacing:-.01em;margin-bottom:16px}
 .modal-actions{display:flex;gap:10px;margin-top:16px}
+
+/* Meget diskret filmkorn på hele appen for en mere "tactile"/premium
+   overflade, samme teknik som RC_Hjemmeside — respekterer klik
+   (pointer-events:none), ingen ekstra billed-filer (ren SVG-støj). */
+body::before{
+  content:'';
+  position:fixed;inset:0;z-index:9999;pointer-events:none;
+  opacity:.025;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
 
 /* ── EMPTY STATES ── */
 .empty{text-align:center;padding:48px 24px;color:var(--gray)}
