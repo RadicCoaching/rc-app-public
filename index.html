@@ -1382,7 +1382,7 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 <!-- Coach-opgave (ugentlig huskeliste, 2026-08-13) -->
 <div class="modal-overlay" id="modal-coach-task">
   <div class="modal">
-    <div class="modal-title">Ny opgave</div>
+    <div class="modal-title" id="modal-coach-task-title">Ny opgave</div>
     <div class="field"><label>Opgave</label><input type="text" id="ct-title" placeholder="fx Ring til klient om ugens træning"></div>
     <div class="field"><label>Ugedag</label>
       <select id="ct-day"></select>
@@ -3491,7 +3491,17 @@ function renderCoachDashboard() {
     list.innerHTML = '<div class="empty"><span class="empty-icon">👥</span><p>Ingen klienter endnu</p></div>';
   } else {
     const weekKeyNow = currentWeekKey();
-    list.innerHTML = DATA.clients.map(c => {
+    // Rune: "Kan dem der er i afslutningsfasen evt være i sin egen
+    // gruppering, så jeg ikke skal lede blandt aktive klienter?" —
+    // klienter med en aktiv pilot-/dataopbevaringsfrist vises nu i en
+    // separat sektion nederst, sorteret efter hvem der udløber først.
+    // "Nulstil"-knappen på klientens egen side flytter dem tilbage til
+    // Aktive (bevidst manuelt — hun skal selv kunne vælge, hvis en klient
+    // kommer og går flere gange).
+    const activeClients = DATA.clients.filter(c => !c.dataRetentionUntil);
+    const endingClients = DATA.clients.filter(c => c.dataRetentionUntil)
+      .sort((a, b) => a.dataRetentionUntil.localeCompare(b.dataRetentionUntil));
+    const rowFn = c => {
       const lastCi = getLastCheckin(c.id);
       const pendingVideo = pendingVideoByClient[String(c.id)];
       const pending = getPendingCheckins(c.id).length + (pendingVideo ? pendingVideo.count : 0);
@@ -3563,7 +3573,13 @@ function renderCoachDashboard() {
         </div>
         <div class="status-dot ${dotClass}"></div>
       </div>`;
-    }).join('');
+    };
+    let listHtml = activeClients.map(rowFn).join('');
+    if (endingClients.length) {
+      listHtml += `<div class="section-head" style="margin-top:20px">⏳ I afslutningsfase (${endingClients.length})</div>`
+        + endingClients.map(rowFn).join('');
+    }
+    list.innerHTML = listHtml;
   }
 
   // Pending
@@ -3632,12 +3648,16 @@ function renderNoContactWarning(clientId) {
 // Rune: "kan jeg lave en funktion hvor jeg sætter de '3 måneder i gang'...
 // så jeg altid kan huske alle klienters slutdato" — vises altid når fristen
 // er sat (ikke kun i sidste øjeblik, som ⚠ Ingen kontakt-varslen ovenfor).
+const RETENTION_DAYS_LEFT_WARNING = 10;
 function renderRetentionWarning(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client || !client.dataRetentionUntil) return '';
   const daysLeft = Math.ceil((new Date(client.dataRetentionUntil) - new Date(todayLocalStr())) / 86400000);
-  if (daysLeft <= 0) return `<div style="font-size:12px;color:#D9A441;margin-top:5px">⏳ Pilotfrist udløbet (${client.dataRetentionUntil})</div>`;
-  return `<div style="font-size:12px;color:var(--gray);margin-top:5px">⏳ Pilotfrist: ${client.dataRetentionUntil} (${daysLeft} dage)</div>`;
+  if (daysLeft <= 0) return `<div style="font-size:12px;color:var(--gray);margin-top:5px">⏳ Pilotfrist udløbet (<span style="color:var(--danger);font-weight:700">${client.dataRetentionUntil}</span>)</div>`;
+  // Rune: "Tallene i oversigten, kan de blive 'røde' når der er 10 tilbage?" —
+  // kun selve dage-tallet farves, resten af linjen forbliver neutral.
+  const daysColor = daysLeft <= RETENTION_DAYS_LEFT_WARNING ? 'var(--danger)' : 'var(--gray)';
+  return `<div style="font-size:12px;color:var(--gray);margin-top:5px">⏳ Pilotfrist: ${client.dataRetentionUntil} (<span style="color:${daysColor};font-weight:700">${daysLeft} dage</span>)</div>`;
 }
 
 function avgScore(ci) {
@@ -9345,12 +9365,12 @@ function renderCoachTasksSection() {
 
   const rowsHtml = today.map(t => `
     <div class="card" style="margin-bottom:6px;background:var(--accent);display:flex;justify-content:space-between;align-items:center">
-      <div style="color:#111;font-weight:700;font-size:13px">I DAG — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
-      <button class="btn-icon" style="color:#111" onclick="deleteCoachTask(${t.id})">×</button>
+      <div style="color:#111;font-weight:700;font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">I DAG — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
+      <button class="btn-icon" style="color:#111" onclick="event.stopPropagation(); deleteCoachTask(${t.id})">×</button>
     </div>`).join('') + (coachTasksRestExpanded ? rest.map(t => `
     <div class="card" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:13px">${WEEKDAY_LABELS[t.dayOfWeek]} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
-      <button class="btn-icon" onclick="deleteCoachTask(${t.id})">×</button>
+      <div style="font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">${WEEKDAY_LABELS[t.dayOfWeek]} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
+      <button class="btn-icon" onclick="event.stopPropagation(); deleteCoachTask(${t.id})">×</button>
     </div>`).join('') : (rest.length
       ? `<div class="card-sub" style="text-align:center;cursor:pointer;color:var(--accent)" onclick="toggleCoachTasksRest()">Vis resten af ugens opgaver (${rest.length})</div>`
       : ''));
@@ -9364,7 +9384,15 @@ function renderCoachTasksSection() {
   `;
 }
 
+// Rune: "'mine opgaver' jeg kan ikke rette opgaven i web versionen??" —
+// modalen kunne kun OPRETTE nye opgaver (saveCoachTask() lavede altid en
+// ny række), ingen måde at redigere en eksisterende. editingCoachTaskId
+// styrer om saveCoachTask() opdaterer i stedet for at oprette.
+let editingCoachTaskId = null;
+
 function openAddCoachTask() {
+  editingCoachTaskId = null;
+  document.getElementById('modal-coach-task-title').textContent = 'Ny opgave';
   document.getElementById('ct-title').value = '';
   document.getElementById('ct-day').innerHTML = WEEKDAY_LABELS
     .map((l, i) => `<option value="${i}" ${i === new Date().getDay() ? 'selected' : ''}>${l}</option>`).join('');
@@ -9373,13 +9401,33 @@ function openAddCoachTask() {
   document.getElementById('modal-coach-task').classList.add('open');
 }
 
+function openEditCoachTask(id) {
+  const task = (DATA.coachTasks || []).find(t => t.id === id);
+  if (!task) return;
+  editingCoachTaskId = id;
+  document.getElementById('modal-coach-task-title').textContent = 'Redigér opgave';
+  document.getElementById('ct-title').value = task.title;
+  document.getElementById('ct-day').innerHTML = WEEKDAY_LABELS
+    .map((l, i) => `<option value="${i}" ${i === task.dayOfWeek ? 'selected' : ''}>${l}</option>`).join('');
+  document.getElementById('ct-client').innerHTML = '<option value="">Ingen klient</option>' +
+    DATA.clients.map(c => `<option value="${c.id}" ${c.id === task.clientId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+  document.getElementById('modal-coach-task').classList.add('open');
+}
+
 function saveCoachTask() {
   const title = document.getElementById('ct-title').value.trim();
   if (!title) { alert('Skriv en opgave først'); return; }
   const day = parseInt(document.getElementById('ct-day').value, 10);
   const clientVal = document.getElementById('ct-client').value;
+  const clientId = clientVal ? parseInt(clientVal, 10) : null;
   if (!DATA.coachTasks) DATA.coachTasks = [];
-  DATA.coachTasks.push({ id: genId(), clientId: clientVal ? parseInt(clientVal, 10) : null, title, dayOfWeek: day });
+  if (editingCoachTaskId != null) {
+    const task = DATA.coachTasks.find(t => t.id === editingCoachTaskId);
+    if (task) { task.title = title; task.dayOfWeek = day; task.clientId = clientId; }
+  } else {
+    DATA.coachTasks.push({ id: genId(), clientId, title, dayOfWeek: day });
+  }
+  editingCoachTaskId = null;
   save();
   closeModal('modal-coach-task');
   renderCoachTasksSection();
