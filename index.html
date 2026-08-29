@@ -2548,7 +2548,7 @@ setInterval(pollForUpdates, 45000);
 let knownAlertState = { checkinIds: new Set(), bookingIds: new Set(), goalKeys: new Set(), initialized: false };
 
 function snapshotAlertState() {
-  const checkinIds = new Set((DATA.checkins || []).filter(ci => !ci.reply && !ci.autoReplied && !ci.hiddenForCoach).map(ci => ci.id));
+  const checkinIds = new Set((DATA.checkins || []).filter(ci => (!ci.reply || ci.autoReplied) && !ci.hiddenForCoach).map(ci => ci.id));
   const bookingIds = new Set(getCoachBookingNotifications().map(s => s.id));
   const goalKeys = new Set(getCoachGoalNotifications().map(n => n.clientId + '_' + n.key));
   return { checkinIds, bookingIds, goalKeys };
@@ -2995,7 +2995,32 @@ async function trySubmitSetup() {
   await completeLoginResult(result);
 }
 
-function logout() {
+// Rune (2026-08-29): "en mere speciel coach login som gør at det ikke sker
+// igen" — en klient modtog en notifikation der reelt var beregnet til
+// coachen. Rodårsagen: en enheds/browsers push-abonnement blev aldrig
+// ryddet ved log-ud, så en enhed der ÉN gang har aktiveret notifikationer
+// som coach bliver ved med at modtage coachens notifikationer for evigt,
+// uanset hvem der logger ind i den browser bagefter. Køres FØR selve
+// log-ud'et (skal stadig være logget ind for at have lov til at slette sin
+// egen række, jf. RLS), og unsubscriber også browserens abonnement helt, så
+// et evt. senere "Aktivér notifikationer"-tryk laver et helt nyt.
+async function unregisterPushSubscription() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (!sub) return;
+    const endpoint = sub.toJSON().endpoint;
+    if (sb && endpoint) await sb.from('push_subscriptions').delete().eq('endpoint', endpoint);
+    await sub.unsubscribe();
+  } catch (e) {
+    // Bedst-forsøg oprydning — log-ud skal aldrig fejle pga. dette.
+    console.error('Kunne ikke rydde push-abonnement ved log-ud', e);
+  }
+}
+
+async function logout() {
+  await unregisterPushSubscription();
   currentUser = null;
   currentClientId = null;
   clearSession();
@@ -3314,7 +3339,7 @@ async function refreshInboxVideoItems() {
 
 function buildInboxItems() {
   const items = [];
-  DATA.checkins.filter(ci => !ci.reply && !ci.autoReplied && !ci.hiddenForCoach && !ci.coachSeen && !isSnoozed(ci.snoozedUntil)).forEach(ci => {
+  DATA.checkins.filter(ci => (!ci.reply || ci.autoReplied) && !ci.hiddenForCoach && !ci.coachSeen && !isSnoozed(ci.snoozedUntil)).forEach(ci => {
     const client = DATA.clients.find(c => c.id === ci.clientId);
     items.push({
       key: 'checkin-' + ci.id, kind: 'checkin', id: ci.id, clientId: ci.clientId,
@@ -3610,7 +3635,7 @@ function renderCoachDashboard() {
   }
 
   // Pending
-  const pending = DATA.checkins.filter(ci => !ci.reply && !ci.autoReplied && !ci.hiddenForCoach);
+  const pending = DATA.checkins.filter(ci => (!ci.reply || ci.autoReplied) && !ci.hiddenForCoach);
   const pendingEl = document.getElementById('coach-pending-list');
   updateBadges(pending.length);
   if (!pending.length) {
@@ -3649,7 +3674,7 @@ function getLastCheckin(clientId) {
 }
 
 function getPendingCheckins(clientId) {
-  return DATA.checkins.filter(c => c.clientId === clientId && !c.reply && !c.autoReplied && !c.hiddenForCoach);
+  return DATA.checkins.filter(c => c.clientId === clientId && (!c.reply || c.autoReplied) && !c.hiddenForCoach);
 }
 
 const NO_CONTACT_WARNING_DAYS = 10;
@@ -3849,7 +3874,7 @@ function renderMessagesClientList(el) {
     const cis = DATA.checkins.filter(ci => ci.clientId === c.id && !ci.hiddenForCoach).sort((a,b) => b.date.localeCompare(a.date));
     const last = cis[0] || null;
     const pendingVideo = pendingVideoByClient[String(c.id)];
-    const pending = cis.filter(ci => !ci.reply && !ci.autoReplied).length + (pendingVideo ? pendingVideo.count : 0);
+    const pending = cis.filter(ci => !ci.reply || ci.autoReplied).length + (pendingVideo ? pendingVideo.count : 0);
     return { client: c, cis, last, pending, pendingVideo };
   });
 
