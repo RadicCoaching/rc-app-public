@@ -7288,9 +7288,20 @@ function resetRetention(clientId) {
   showToast('Frist nulstillet');
 }
 
+// Designgennemgang 2026-08-29 (Rune): denne sletning fjerner PERMANENT alt
+// om klienten (check-ins, målinger, aftaler, klip) — men havde samme lette
+// confirm() som at slette én enkelt note. Kræver nu at klientens navn
+// tastes ind præcist, samme "skriv for at bekræfte"-mønster som andre
+// systemers mest destruktive handlinger.
 function deleteClient(clientId) {
-  if (!confirm('Slet denne klient og alle check-ins?')) return;
   const client = DATA.clients.find(c => c.id === clientId);
+  if (!client) return;
+  const typed = prompt(`Dette sletter ${client.name} og AL deres data permanent — check-ins, målinger, aftaler, klip, alt.\n\nSkriv klientens navn for at bekræfte:`);
+  if (typed === null) return;
+  if (typed.trim() !== client.name) {
+    alert('Navnet matchede ikke — intet blev slettet.');
+    return;
+  }
   (client && client.programs || []).forEach(p => pendingDeletes.programs.add(p.id));
   pendingDeletes.clients.add(clientId);
   DATA.clients = DATA.clients.filter(c => c.id !== clientId);
