@@ -2877,7 +2877,7 @@ setInterval(() => {
     if (!raw) return;
     const { ts } = JSON.parse(raw);
     if (Date.now() - ts > IDLE_TIMEOUT_MS) {
-      logout();
+      lockSessionForIdle();
       showToast('Låst efter ' + IDLE_TIMEOUT_MINUTES + ' min. inaktivitet');
     }
   } catch(e){}
@@ -3019,8 +3019,30 @@ async function unregisterPushSubscription() {
   }
 }
 
+// Rune (2026-08-29): "Log ud" skal betyde et RIGTIGT log-ud — hele nøglen
+// (JWT) skal væk, ikke kun "hvem er logget ind lige nu"-tilstanden. Det var
+// tidligere IKKE tilfældet (samme funktion som inaktivitets-låsen brugte),
+// bevidst for at Face ID kunne genoptage en session — men det betød at en
+// tidligere brugers nøgle blev liggende på enheden efter et bevidst log-ud.
+// Inaktivitets-lås (samme enhed, samme person, bare væk et øjeblik) er en
+// anden situation end et rigtigt log-ud, og har derfor sin egen funktion
+// nedenfor — lockSessionForIdle() — som IKKE rører JWT'et eller
+// push-abonnementet, præcis som før.
 async function logout() {
   await unregisterPushSubscription();
+  currentUser = null;
+  currentClientId = null;
+  clearSession();
+  clearJwt();
+  setSupabaseAuthToken(null);
+  showScreen('screen-login');
+}
+
+// Inaktivitets-lås — se kommentaren ved logout() ovenfor for hvorfor denne
+// er adskilt derfra. Rydder KUN "hvem er logget ind lige nu", beholder JWT
+// (7 dages levetid) og push-abonnementet urørt, så Face ID/fingeraftryk kan
+// genoptage NETOP den session igen, uden at bede om PIN.
+function lockSessionForIdle() {
   currentUser = null;
   currentClientId = null;
   clearSession();
