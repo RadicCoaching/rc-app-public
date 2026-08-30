@@ -10609,6 +10609,32 @@ async function exportClientReportPdf(clientId) {
     weightLine = `Kun 1 måling i perioden (${weightsInWindow[0].weight} kg, ${weightsInWindow[0].date}).`;
   }
 
+  // Rune: "mangler ... tendenser, uge for uge osv" — periodens gennemsnit
+  // alene skjuler om klienten er på vej op eller ned undervejs. Deler derfor
+  // samme 30-dages-vindue op i ugentlige bidder (uge 1 = ældst).
+  const weekBuckets = [];
+  {
+    const startD = new Date(since + 'T00:00:00');
+    for (let w = 0; w * 7 < windowDays; w++) {
+      const wStart = new Date(startD); wStart.setDate(wStart.getDate() + w * 7);
+      const wEnd = new Date(startD); wEnd.setDate(wEnd.getDate() + Math.min(w * 7 + 6, windowDays - 1));
+      weekBuckets.push({ start: toLocalDateStr(wStart), end: toLocalDateStr(wEnd) });
+    }
+  }
+  const weekLines = weekBuckets.map((wk, i) => {
+    const wCheckins = checkins.filter(c => c.date >= wk.start && c.date <= wk.end);
+    const wTraining = training.filter(t => t.date >= wk.start && t.date <= wk.end);
+    const wWeights = weightsInWindow.filter(m => m.date >= wk.start && m.date <= wk.end);
+    const wE = avg(wCheckins.map(c => c.energy).filter(v => v != null));
+    const wS = avg(wCheckins.map(c => c.sleep).filter(v => v != null));
+    const wT = avg(wCheckins.map(c => c.training).filter(v => v != null));
+    const statsStr = (wE != null || wS != null || wT != null)
+      ? `Energi ${wE ?? '–'} · Søvn ${wS ?? '–'} · Træningslyst ${wT ?? '–'}`
+      : 'Ingen check-ins';
+    const weightStr = wWeights.length ? ` · Vægt ${wWeights[wWeights.length - 1].weight} kg` : '';
+    return `Uge ${i + 1} (${wk.start} – ${wk.end}): ${statsStr} · ${wTraining.length} træningspas${weightStr}`;
+  });
+
   const countBy = (list, keyFn) => {
     const counts = {};
     list.forEach(item => { const k = keyFn(item) || 'Andet'; counts[k] = (counts[k] || 0) + 1; });
@@ -10650,6 +10676,7 @@ async function exportClientReportPdf(clientId) {
   section(`Check-ins (${checkins.length} i perioden)`, [
     `Energi (snit): ${energyAvg ?? '–'}    Søvn (snit): ${sleepAvg ?? '–'}    Træning (snit): ${trainingAvg ?? '–'}`,
   ]);
+  section('Uge for uge', weekLines);
   section(`Træning (${training.length} gennemført i perioden)`, trainingTypes.length ? trainingTypes.map(([t, n]) => `${t}: ${n}`) : ['Ingen træning logget i perioden.']);
   section('Vægt', [weightLine]);
 
