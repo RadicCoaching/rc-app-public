@@ -10548,7 +10548,7 @@ function exportMealLogPdf(clientId) {
 // klienten. Porteret fra rc-mobiles clientReportPdf.ts samme dag (samme
 // indhold, jsPDF i stedet for expo-print/HTML — web's egen etablerede
 // PDF-teknik, se exportMealLogPdf() ovenfor).
-function exportClientReportPdf(clientId) {
+async function exportClientReportPdf(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client) return;
   if (!window.jspdf) { showToast('PDF-modul kunne ikke indlæses — tjek internetforbindelse'); return; }
@@ -10564,6 +10564,35 @@ function exportClientReportPdf(clientId) {
   const weightsInWindow = (DATA.bodyMetrics || [])
     .filter(m => m.clientId === clientId && m.weight != null && m.date >= since)
     .sort((a, b) => a.date.localeCompare(b.date));
+
+  // Rune: "ALLE data skal være med, også tanita scan hvis denne eksisterer" —
+  // rapporten er til coachens eget brug, så den viser altid alt uafhængigt af
+  // klientens visnings-toggles (show_bmi/show_bmr osv, som kun styrer klientens
+  // egen visning i appen).
+  const allWeights = (DATA.bodyMetrics || [])
+    .filter(m => m.clientId === clientId && m.weight != null)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const latestWeight = allWeights.length ? allWeights[allWeights.length - 1].weight : null;
+
+  let tanitaScans = [];
+  if (sb) {
+    showToast('Henter komplette klientdata …');
+    const { data, error } = await sb.from('tanita_scans')
+      .select('date, weight_kg, bmi, values')
+      .eq('client_id', clientId)
+      .order('date', { ascending: false });
+    if (!error) tanitaScans = data || [];
+  }
+  const latestScan = tanitaScans[0] || null;
+  const bodyFatPercent = latestTanitaBodyFatPercent(tanitaScans);
+
+  const heightM = client.heightCm ? client.heightCm / 100 : null;
+  const bmi = latestScan && latestScan.bmi != null
+    ? Number(latestScan.bmi)
+    : (heightM && latestWeight != null ? Math.round((latestWeight / (heightM * heightM)) * 10) / 10 : null);
+  const { bmr, usedTanita } = computeBMRAuto(client, latestWeight, bodyFatPercent);
+  const pal = palInfo(client.pal);
+  const tdee = (bmr != null && pal) ? Math.round(bmr * pal.value) : null;
 
   const avg = nums => nums.length ? Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10 : null;
   const energyAvg = avg(checkins.map(c => c.energy).filter(v => v != null));
@@ -10623,6 +10652,32 @@ function exportClientReportPdf(clientId) {
   ]);
   section(`Træning (${training.length} gennemført i perioden)`, trainingTypes.length ? trainingTypes.map(([t, n]) => `${t}: ${n}`) : ['Ingen træning logget i perioden.']);
   section('Vægt', [weightLine]);
+
+  const bodyLines = [];
+  bodyLines.push(`Højde: ${client.heightCm ? client.heightCm + ' cm' : 'Ikke registreret'}`);
+  bodyLines.push(`Alder: ${client.birthYear ? (new Date().getFullYear() - client.birthYear) + ' år' : 'Ikke registreret'}`);
+  bodyLines.push(`Seneste vægt: ${latestWeight != null ? latestWeight + ' kg (' + allWeights[allWeights.length - 1].date + ')' : 'Ingen vægt-målinger endnu'}`);
+  bodyLines.push(`BMI: ${bmi != null ? bmi + ' kg/m²' : 'Kan ikke beregnes (mangler højde og/eller vægt)'}`);
+  bodyLines.push(`BMR: ${bmr != null ? Math.round(bmr) + ' kcal i hvile' + (usedTanita ? ' (Katch-McArdle, ud fra seneste Tanita-scan)' : ' (Mifflin-St Jeor)') : 'Kan ikke beregnes (mangler højde/fødselsår/køn/vægt)'}`);
+  if (tdee != null) {
+    bodyLines.push(`TDEE (vedligehold): ${tdee} kcal · PAL ${palDisplay(pal.value)} — ${pal.label.toLowerCase()}`);
+    bodyLines.push(`Kalorie-mål: vedligehold ${tdee} · langsomt tab (−350) ${Math.round(tdee - 350)} · moderat tab (−500) ${Math.round(tdee - 500)} · langsom opbygning (+250) ${Math.round(tdee + 250)}`);
+  } else if (bmr != null) {
+    bodyLines.push('TDEE: venter på at aktivitetsniveau (PAL) sættes for klienten.');
+  }
+  section('Krop & stofskifte', bodyLines);
+
+  if (latestScan) {
+    const scanLines = [`Seneste scan: ${latestScan.date} (${tanitaScans.length} scan${tanitaScans.length === 1 ? '' : 'ninger'} i alt)`];
+    if (latestScan.weight_kg != null) scanLines.push(`Vægt (fra enhed): ${latestScan.weight_kg} kg`);
+    if (latestScan.bmi != null) scanLines.push(`BMI (fra enhed): ${latestScan.bmi}`);
+    (latestScan.values || []).forEach(v => {
+      if (v.value == null) return;
+      scanLines.push(`${v.label || v.key}: ${v.value}${v.unit ? ' ' + v.unit : ''}`);
+    });
+    section('Tanita-scan', scanLines);
+  }
+
   section('Kost-log', [`${meals.length} måltider logget i perioden.`]);
   section(`Samtaler & noter (${conversations.length} i perioden)`, conversationTypes.length ? conversationTypes.map(([t, n]) => `${t}: ${n}`) : ['Ingen samtaler noteret i perioden.']);
 
