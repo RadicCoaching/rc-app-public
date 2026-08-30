@@ -3607,22 +3607,35 @@ function renderCoachDashboard() {
       if (prog && prog.paused) {
         trainingBadge = `<span title="Træningsmål sat på pause" style="font-size:11px;background:var(--border);color:var(--gray);padding:1px 7px;border-radius:10px;margin-left:6px;white-space:nowrap">⏸ Pause</span>`;
       } else if (prog && prog.goals.length) {
+        // Rune: "hvorfor blev min og nikitas blå når alle andre er en anden
+        // farve? Det skal være ens ved alle klienter" — "der må gerne være
+        // farve på teksten, men den skal bare være ens på alle klienter."
+        // Farve varierede før efter status (gul/grå/blå), så to klienter
+        // kunne ligne hinanden forskelligt afhængigt af hvor langt de var
+        // nået denne specifikke uge. Alle chips ser nu ens ud for alle
+        // klienter; "i mål" markeres kun med et ✓ i selve teksten.
+        //
+        // Designgennemgang 2026-08-29 (Rune): "jeg vil kunne se ekstra
+        // træninger i oversigten også" — chipsene blev tidligere skjult helt
+        // så snart alle mål var nået, så et ekstra-logget pas (fx tredje
+        // styrke-træning når målet er 2) var usynligt. Chips vises nu ALTID
+        // ved siden af "🏆 Mål nået"-mærket, med 🔥 når man har trænet mere
+        // end målet. Porteret fra rc-mobile samme dag (parity).
         if (prog.overallDone) {
           trainingBadge = `<span title="Alle træningsmål nået denne uge" style="font-size:11px;font-weight:700;background:var(--accent);color:#111;padding:1px 7px;border-radius:10px;margin-left:6px;white-space:nowrap">🏆 Mål nået</span>`;
-        } else {
-          // Rune: "hvorfor blev min og nikitas blå når alle andre er en anden
-          // farve? Det skal være ens ved alle klienter" — "der må gerne være
-          // farve på teksten, men den skal bare være ens på alle klienter."
-          // Farve varierede før efter status (gul/grå/blå), så to klienter
-          // kunne ligne hinanden forskelligt afhængigt af hvor langt de var
-          // nået denne specifikke uge. Alle chips ser nu ens ud for alle
-          // klienter; "i mål" markeres kun med et ✓ i selve teksten.
-          const chips = prog.goals.map(g => {
-            const label = `${escapeHtml(g.type)} ${g.count}/${g.target}${g.done ? ' ✓' : ''}`;
-            return `<span style="font-size:11px;font-weight:700;background:var(--border);color:var(--accent-blue);padding:1px 7px;border-radius:10px;white-space:nowrap">${label}</span>`;
-          }).join('');
-          progressRow = `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">${chips}</div>`;
         }
+        const chips = prog.goals.map(g => {
+          const label = `${escapeHtml(g.type)} ${g.count}/${g.target}${g.count > g.target ? ' 🔥' : g.done ? ' ✓' : ''}`;
+          return `<span style="font-size:11px;font-weight:700;background:var(--border);color:var(--accent-blue);padding:1px 7px;border-radius:10px;white-space:nowrap">${label}</span>`;
+        }).join('');
+        progressRow = `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">${chips}</div>`;
+      } else if (prog && prog.extras.length) {
+        trainingBadge = `<span title="Har trænet denne uge" style="font-size:11px;background:var(--border);color:var(--gray);padding:1px 7px;border-radius:10px;margin-left:6px;white-space:nowrap">🏃 Trænet</span>`;
+        const chips = prog.extras.map(e => {
+          const label = `${escapeHtml(e.type)} ${e.count} 🔥`;
+          return `<span style="font-size:11px;font-weight:700;background:var(--border);color:var(--accent-blue);padding:1px 7px;border-radius:10px;white-space:nowrap">${label}</span>`;
+        }).join('');
+        progressRow = `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">${chips}</div>`;
       } else {
         const trainedThisWeek = (DATA.trainingCheckins || []).some(t => t.clientId === c.id && isDateInWeekKey(t.date, weekKeyNow));
         if (trainedThisWeek) {
