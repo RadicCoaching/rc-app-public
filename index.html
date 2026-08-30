@@ -10646,6 +10646,7 @@ async function exportClientReportPdf(clientId) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
   const margin = 40;
   let y = margin;
 
@@ -10658,7 +10659,19 @@ async function exportClientReportPdf(clientId) {
   y += 28;
   doc.setTextColor(0);
 
+  // Rune ville have "ALLE data med" i rapporten — for klienter med mange
+  // check-ins/måltider fylder det let mere end én A4-side, og uden
+  // sideskift-håndtering ville jsPDF bare tegne teksten ud over sidens
+  // kant, usynligt. ensureSpace() sikrer en ny side når der ikke er plads.
+  const ensureSpace = (neededHeight) => {
+    if (y + neededHeight > pageH - margin) {
+      doc.addPage();
+      y = margin;
+    }
+  };
+
   const section = (title, lines) => {
+    ensureSpace(18 + 14);
     doc.setFontSize(13);
     doc.setFont(undefined, 'bold');
     doc.text(title, margin, y);
@@ -10667,8 +10680,10 @@ async function exportClientReportPdf(clientId) {
     doc.setFontSize(11);
     lines.forEach(line => {
       const wrapped = doc.splitTextToSize(line, pageW - margin * 2);
+      const h = wrapped.length * 14 + 2;
+      ensureSpace(h);
       doc.text(wrapped, margin, y);
-      y += wrapped.length * 14 + 2;
+      y += h;
     });
     y += 14;
   };
@@ -10705,7 +10720,18 @@ async function exportClientReportPdf(clientId) {
     section('Tanita-scan', scanLines);
   }
 
-  section('Kost-log', [`${meals.length} måltider logget i perioden.`]);
+  // Rune: "mangler kcal, makroer ... fra billeder OG beskrivelser" — for at
+  // et estimat kan laves (fra klientrapporten alene, uden appen åben) skal
+  // hver logning stå med dato/type/note, ikke kun et samlet antal. Billeder
+  // embeddes bevidst ikke her (kan gøre PDF'en meget stor/langsom ved mange
+  // logninger) — del dem separat når et estimat ønskes.
+  const mealLines = meals.length
+    ? meals
+        .slice()
+        .sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''))
+        .map(m => `${m.date}${m.time ? ' ' + m.time : ''} — ${m.mealType || 'Måltid'}${m.note ? ': ' + m.note : ''}`)
+    : ['Ingen måltider logget i perioden.'];
+  section(`Kost-log (${meals.length} måltider logget i perioden)`, mealLines);
   section(`Samtaler & noter (${conversations.length} i perioden)`, conversationTypes.length ? conversationTypes.map(([t, n]) => `${t}: ${n}`) : ['Ingen samtaler noteret i perioden.']);
 
   doc.save(`klientrapport-${client.name.replace(/\s+/g, '_')}.pdf`);
