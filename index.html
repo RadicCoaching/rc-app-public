@@ -8237,6 +8237,22 @@ function handleExercisePhotoUpload(inputEl) {
   });
 }
 
+// Æstetik/fejrings-runde (2026-08-31), punkt pr1 — samme funktion som
+// rc-mobiles weightRecordValue() (se dens CHANGELOG.md for den fulde
+// begrundelse): udtrækker en sammenlignelig værdi og "art" fra en rå
+// vægt-streng. For BW sammenlignes kun ekstra-vægten (fx vægtvest) —
+// selve kropsvægten svinger af andre grunde end træningsfremgang.
+function weightRecordValue(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  const bw = s.match(/^bw:([\d.]+)(?:\+([\d.]+))?$/i);
+  if (bw) return { kind: 'bw', value: bw[2] ? parseFloat(bw[2]) : 0 };
+  const sec = s.match(/^sec:([\d.]+)$/i);
+  if (sec) return { kind: 'sec', value: parseFloat(sec[1]) };
+  const n = parseFloat(s.replace(',', '.'));
+  return isFinite(n) ? { kind: 'kg', value: n } : null;
+}
+
 async function saveExerciseDetailWeight() {
   const raw = document.getElementById('ex-detail-weight-input').value;
   const date = document.getElementById('ex-detail-date-input').value;
@@ -8257,6 +8273,17 @@ async function saveExerciseDetailWeight() {
   } else {
     value = raw;
   }
+  // Rekord-tjek FØR indsættelse — mod al tidligere historik af samme "art"
+  // (kg/BW-ekstra/sekunder), ikke kun kg. Kræver mindst én tidligere
+  // logning af samme art at slå, ellers ville allerførste logning også
+  // tælle som "rekord".
+  const clientForPr = DATA.clients.find(c => c.id === currentExerciseDetail.clientId);
+  const programForPr = clientForPr.programs.find(p => p.id === currentExerciseDetail.programId);
+  const priorHistory = (programForPr.weightLogs && programForPr.weightLogs[currentExerciseDetail.libraryId]) || [];
+  const newRecord = weightRecordValue(value);
+  const sameKindHistory = priorHistory.map(h => weightRecordValue(h.weight)).filter(v => v && newRecord && v.kind === newRecord.kind);
+  const isNewPr = !!newRecord && sameKindHistory.length > 0 && sameKindHistory.every(v => newRecord.value > v.value);
+
   const pending = saveExerciseWeight(currentExerciseDetail.clientId, currentExerciseDetail.programId, currentExerciseDetail.libraryId, value, date);
   renderExerciseWeightHistory();
   document.getElementById('ex-detail-date-input').value = todayLocalStr();
@@ -8273,6 +8300,10 @@ async function saveExerciseDetailWeight() {
   showToast('Gemmer...');
   if (pending) { try { await pending; } catch(e) {} }
   showToast('Vægt gemt — ' + fmtShortDate(date));
+  if (isNewPr) {
+    const ex = (DATA.exerciseLibrary || []).find(e => e.id === currentExerciseDetail.libraryId);
+    showCelebration([`Ny personlig rekord i ${ex ? ex.name : 'øvelsen'}: ${formatWeightDisplay(value)}! 💪`]);
+  }
 }
 
 // ══════════════════════════════════════
