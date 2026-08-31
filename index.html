@@ -4084,7 +4084,7 @@ function renderCoachCalendar() {
             ${a._source === 'booking' ? '<div class="evt-who" style="color:var(--lgray)">📅 Booket i Book tid</div>' : ''}
             <div style="display:flex;gap:10px;margin-top:4px">
               <button class="btn btn-sm btn-ghost" style="padding:2px 0;font-size:11px" onclick="downloadAppointmentICS(${a.id})">📥 Download</button>
-              ${a._source === 'booking' ? '' : `<button class="btn btn-sm btn-ghost btn-danger" style="padding:2px 0;font-size:11px" onclick="deleteAppointment(${a.id})">Slet</button>`}
+              ${a._source === 'booking' ? `<button class="btn btn-sm btn-ghost" style="padding:2px 0;font-size:11px;color:var(--accent)" onclick="coachCalSubtab('booking')">→ Rediger i Book tid</button>` : `<button class="btn btn-sm btn-ghost btn-danger" style="padding:2px 0;font-size:11px" onclick="deleteAppointment(${a.id})">Slet</button>`}
             </div>
           </div>`;
         }).join('')}
