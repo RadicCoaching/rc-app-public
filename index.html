@@ -6237,6 +6237,7 @@ function openClientDetail(clientId) {
 }
 
 function backToCoachDashboard() {
+  if (!confirmLeaveSettingsIfDirty(currentClientId)) return;
   document.getElementById('coach-client-detail').style.display = 'none';
   document.getElementById('coach-dashboard').style.display = 'flex';
   document.getElementById('coach-dashboard').style.flexDirection = 'column';
@@ -6244,6 +6245,7 @@ function backToCoachDashboard() {
 }
 
 function clientTab(tab) {
+  if (tab !== currentDetailTab && !confirmLeaveSettingsIfDirty(currentClientId)) return;
   currentDetailTab = tab;
   const tabs = ['history','klip','program','progress','notes','settings'];
   const bar = document.querySelector('#coach-client-detail .client-header-tabs');
@@ -7256,6 +7258,50 @@ function toggleClientStatVisibility(clientId, key) {
   save();
   renderDetailSettings(clientId);
   showToast('Gemt');
+}
+
+// Design-gennemgang, punkt k10: "Tre forskellige gem-modeller på ÉN side —
+// Topfelterne kræver eksplicit 'Gem', 'Gem fokus' er en anden, separat
+// gem-knap længere nede, og til/fra-knapperne gemmer med det samme. En
+// coach der redigerer højde og derefter navigerer væk uden at bemærke det,
+// mister ændringen." Bevidst IKKE en fuld omlægning til én model (det er
+// den større k9-beslutning om at dele siden op i under-sider) — kun en
+// advarsel FØR man forlader siden med ugemte ændringer i de to
+// manuelle-gem-grupper, samme princip som rc-mobiles swipe-tilbage-fix
+// samme dag (se rc-mobile CHANGELOG.md, punkt g4).
+function settingsFieldsDirty(clientId) {
+  const nameEl = document.getElementById('set-name-' + clientId);
+  if (!nameEl) return false; // Indstillinger-fanen er ikke den der vises lige nu.
+  const client = DATA.clients.find(c => c.id === clientId);
+  if (!client) return false;
+  const heightVal = document.getElementById('set-height-' + clientId).value.trim();
+  const birthYearVal = document.getElementById('set-birthyear-' + clientId).value.trim();
+  const birthDayVal = document.getElementById('set-birthday-' + clientId).value.trim();
+  const birthMonthVal = document.getElementById('set-birthmonth-' + clientId).value.trim();
+  const palVal = document.getElementById('set-pal-' + clientId).value;
+  const topDirty =
+    nameEl.value.trim() !== (client.name || '') ||
+    (heightVal ? parseFloat(heightVal) : null) !== (client.heightCm ?? null) ||
+    (birthYearVal ? parseInt(birthYearVal, 10) : null) !== (client.birthYear ?? null) ||
+    (birthDayVal ? parseInt(birthDayVal, 10) : null) !== (client.birthDay ?? null) ||
+    (birthMonthVal ? parseInt(birthMonthVal, 10) : null) !== (client.birthMonth ?? null) ||
+    (document.getElementById('set-sex-' + clientId).value || null) !== (client.sex ?? null) ||
+    (palVal ? parseFloat(palVal) : null) !== (client.pal ?? null) ||
+    (document.getElementById('set-weightgoal-' + clientId).value || null) !== (client.weightGoal ?? null) ||
+    document.getElementById('set-auto-' + clientId).value.trim() !== (client.autoReply || '');
+
+  const focusOverallEl = document.getElementById('focus-overall-' + clientId);
+  const focusDirty = focusOverallEl
+    ? focusOverallEl.value.trim() !== (client.focusOverall || '') ||
+      document.getElementById('focus-current-' + clientId).value.trim() !== (client.focusCurrent || '')
+    : false;
+
+  return topDirty || focusDirty;
+}
+
+function confirmLeaveSettingsIfDirty(clientId) {
+  if (!settingsFieldsDirty(clientId)) return true;
+  return confirm('Du har ugemte ændringer i Indstillinger. Forlad alligevel og kassér dem?');
 }
 
 function saveClientSettings(clientId) {
