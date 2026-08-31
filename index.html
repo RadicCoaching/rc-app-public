@@ -9366,6 +9366,45 @@ function computeTrainingProgress(clientId) {
   return { paused: false, weekKey, goals: goalProgress, extras, overallDone };
 }
 
+// Æstetik/fejrings-runde (2026-08-31), punkt kh6: "Intet streak-koncept
+// nogen steder." Samme logik som rc-mobiles computeWeeklyStreak() (se dens
+// CHANGELOG.md) — computeTrainingProgress() ovenfor er hårdkodet til
+// currentWeekKey(), kan ikke genbruges til at tjekke fortidens uger, så
+// denne funktion genimplementerer "er ugens mål nået"-tjekket parametreret
+// på en vilkårlig uge og tæller baglæns. Kræver mindst ét sat mål. Ugen
+// der er i gang tæller kun med hvis den ALLEREDE er i mål — ellers startes
+// optællingen fra sidste fulde uge, så en igangværende uge ikke "bryder"
+// streaken bare fordi den ikke er færdig endnu.
+function previousWeekKey(weekKey) {
+  const d = new Date(weekKey + 'T12:00:00');
+  d.setDate(d.getDate() - 7);
+  return d.toISOString().split('T')[0];
+}
+const MAX_STREAK_WEEKS = 52; // 1 år, praktisk loft mod uendelig løkke
+
+function computeWeeklyStreak(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  if (!client || (client.trainingPause && client.trainingPause.active)) return 0;
+  const goals = client.trainingGoals || [];
+  if (!goals.length) return 0;
+  const allCheckins = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId);
+
+  function isWeekDone(weekKey) {
+    const checkinsThisWeek = allCheckins.filter(t => isDateInWeekKey(t.date, weekKey));
+    return goals.every(g => checkinsThisWeek.filter(t => t.type === g.type).length >= g.target);
+  }
+
+  let cursor = currentWeekKey();
+  let streak = isWeekDone(cursor) ? 1 : 0;
+  cursor = previousWeekKey(cursor);
+  for (let i = 0; i < MAX_STREAK_WEEKS; i++) {
+    if (!isWeekDone(cursor)) break;
+    streak++;
+    cursor = previousWeekKey(cursor);
+  }
+  return streak;
+}
+
 // Kaldes efter en gemt trænings-check-in. Sammenligner ny fremgang med hvad der allerede
 // er fejret denne uge (client.celebrated), så pop-uppen kun vises første gang målet nås.
 function checkCelebrations(clientId) {
@@ -9713,8 +9752,12 @@ function renderTrainingProgressWidget(clientId, isCoachView) {
             <div style="height:100%;width:100%;background:var(--warn)"></div>
           </div>
         </div>`).join('') : '';
+      const streakCount = computeWeeklyStreak(clientId);
+      const streakHtml = streakCount >= 2
+        ? `<span style="float:right;color:var(--accent);font-weight:800;font-size:13px">🔥 ${streakCount} uger i træk</span>`
+        : '';
       goalHtml = `<div class="card" style="margin-bottom:16px">
-        <div class="card-title" style="margin-bottom:10px">Ugens træning${prog.overallDone ? ' — mål nået! 🎉' : ''}</div>
+        <div class="card-title" style="margin-bottom:10px">Ugens træning${prog.overallDone ? ' — mål nået! 🎉' : ''}${streakHtml}</div>
         ${rows}
         ${extraRows}
       </div>`;
