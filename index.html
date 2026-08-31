@@ -8302,7 +8302,7 @@ async function saveExerciseDetailWeight() {
   showToast('Vægt gemt — ' + fmtShortDate(date));
   if (isNewPr) {
     const ex = (DATA.exerciseLibrary || []).find(e => e.id === currentExerciseDetail.libraryId);
-    showCelebration([`Ny personlig rekord i ${ex ? ex.name : 'øvelsen'}: ${formatWeightDisplay(value)}! 💪`]);
+    showCelebration([`Ny rekord i ${ex ? ex.name : 'øvelsen'}! 💪`]);
   }
 }
 
