@@ -4002,10 +4002,31 @@ async function renderThreadVideoMessages(clientId) {
   el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Dig' : (client ? client.name : 'Klient'), 'hideVideoMessageForCoach', v => !v.from_coach);
 }
 
+// Design-gennemgang, punkt m4: "To uforenelige svar-mekanismer i én
+// samtale-tråd — en fast 'Skriv til [klient]'-boks øverst opretter en helt
+// NY besked, mens hvert enkelt check-in har sit eget svar-felt. Svarer man
+// på et ældre spørgsmål via den øverste boks i stedet for det pågældende
+// check-ins eget felt, forbliver check-innet permanent 'Afventer' selvom
+// det reelt er besvaret." Nudge: "gør det til én entydig svar-mekanisme,
+// eller flet dem visuelt sammen." Bevidst IKKE fjernet/flettet — den
+// øverste boks har også et legitimt brug uafhængigt af noget check-in
+// (fx "husk at møde op 10 minutter før i morgen"). Gør i stedet splittet
+// synligt PRÆCIS når det er relevant: advarer hvis der findes ubesvarede
+// check-ins, så coachen kan vælge det rigtige felt i stedet for at opdage
+// fejlen for sent.
 function sendCoachMessage(clientId) {
   const input = document.getElementById('coach-msg-input-' + clientId);
   const text = input ? input.value.trim() : '';
   if (!text) return;
+  const pending = getPendingCheckins(clientId);
+  if (pending.length > 0) {
+    const ok = confirm(
+      `${pending.length} check-in${pending.length === 1 ? '' : 's'} venter stadig på svar i denne tråd. ` +
+      `Denne besked besvarer dem IKKE automatisk — svar direkte på det enkelte check-in nedenfor for at markere det besvaret.\n\n` +
+      `Send som ny besked alligevel?`
+    );
+    if (!ok) return;
+  }
   const ci = {
     id: Date.now(), clientId,
     date: todayLocalStr(),
