@@ -2295,7 +2295,16 @@ async function refreshFromSupabase() {
       sb.from('weight_logs').select('*'),
       sb.from('exercise_photos').select('*'),
       sb.from('body_metrics').select('*'),
-      sb.from('run_logs').select('*'),
+      // 2026-09-01 (fund fra det grundige gennemtjek): 'route' (GPS-spor,
+      // JSONB — mobil-only, sat ved en gennemført GPS-løbetur) blev
+      // hidtil hentet med '*' selvom web hverken læser eller skriver det
+      // felt NOGET sted (bekræftet: hverken DATA.runLogs's mapping
+      // nedenfor eller rowOf() i pushToSupabase() rører 'route'). Samme
+      // strukturelle mønster som base64-krisen — et felt der kan blive
+      // stort, gentaget hentet af hver eneste klient ved hver polling,
+      // uden at nogen på web nogensinde ser det. Udelader det derfor
+      // eksplicit her, i stedet for at vente på at det bliver et problem.
+      sb.from('run_logs').select('id, client_id, date, distance_km, duration_sec, note, interval_data, type'),
       sb.from('training_checkins').select('*'),
       sb.from('meal_logs').select('*'),
       sb.from('checkins').select('*'),
@@ -8333,17 +8342,23 @@ function handleExercisePhotoUpload(inputEl) {
 // Æstetik/fejrings-runde (2026-08-31), punkt pr1 — samme funktion som
 // rc-mobiles weightRecordValue() (se dens CHANGELOG.md for den fulde
 // begrundelse): udtrækker en sammenlignelig værdi og "art" fra en rå
-// vægt-streng. For BW sammenlignes kun ekstra-vægten (fx vægtvest) —
-// selve kropsvægten svinger af andre grunde end træningsfremgang.
+// vægt-streng.
+// RETTET (2026-09-01): sammenlignede tidligere KUN ekstra-vægten for BW
+// (fx vægtvest), ikke selve kropsvægten — begrundelsen var at kropsvægt
+// svinger af andre grunde end træningsfremgang. Rune: "Jeg kan jo med
+// kropsvægt, får mere vægt på, denne skal fejres på lige vilkår" — for
+// hendes klienter ER en stigende kropsvægt på en BW-øvelse (fx flere
+// vægtede pullups over tid, eller bevidst muskelopbygning) reel fremgang,
+// og skal kunne udløse en rekord på lige fod med kg-øvelser. Sammenligner
+// nu den FULDE værdi (kropsvægt + evt. ekstra), ikke kun ekstra-delen.
 function weightRecordValue(raw) {
   if (raw == null) return null;
   const s = String(raw).trim();
   const bw = s.match(/^bw:([\d.]+)(?:\+([\d.]+))?$/i);
-  if (bw) return { kind: 'bw', value: bw[2] ? parseFloat(bw[2]) : 0 };
+  if (bw) return { kind: 'bw', value: parseFloat(bw[1]) + (bw[2] ? parseFloat(bw[2]) : 0) };
   // Gammel ren "BW" (uden kolon/tal, fra før denne genopbygning, se
   // parseWeightEntry ovenfor) — faldt tidligere igennem til NaN/null og
-  // blev usynlig for rekord-tjekket. Ingen ekstra-vægt kendt, så 0, samme
-  // som "BW:x" uden ekstra.
+  // blev usynlig for rekord-tjekket. Ingen kropsvægt-tal kendt her, så 0.
   if (/^bw$/i.test(s)) return { kind: 'bw', value: 0 };
   const sec = s.match(/^sec:([\d.]+)$/i);
   if (sec) return { kind: 'sec', value: parseFloat(sec[1]) };
