@@ -4293,6 +4293,11 @@ async function saveNewSlot() {
   const note = document.getElementById('slot-note').value.trim();
   if (!date || !time) { showToast('Angiv dato og tidspunkt'); return; }
   if (addSlotVisibilityMode === 'udvalgte' && !addSlotSelectedClients.size) { showToast('Vælg mindst én klient, eller skift til Skjult/Alle'); return; }
+  // Rune: "der skal ikke kunne ligges tider ind to gange, så hvis den
+  // eksisterer i forvejen skal den ikke ligges ind, ELLER jeg får en
+  // advarsel om at tiden er optaget" (2026-09-01).
+  const existingSlot = (DATA.bookingSlots || []).find(s => s.date === date && s.time === time);
+  if (existingSlot && !confirm(`Der findes allerede en tid ${toDkDateStr(date)} kl. ${time}. Opret alligevel?`)) return;
   try { localStorage.setItem('rc_last_slot_location', location); } catch (err) { /* ignore */ }
   // Direkte valgt klient (drop-ned) vinder altid over fritekst-matchet.
   const pickedClientId = document.getElementById('slot-picked-client').value;
@@ -4428,10 +4433,12 @@ function renderBulkSlotsPreview() {
     return;
   }
   const skipped = nonEmptyLines - parsed.length;
-  let html = `<div>${parsed.length} tid${parsed.length === 1 ? '' : 'er'} genkendt${skipped > 0 ? ` (${skipped} linje${skipped === 1 ? '' : 'r'} sprunget over, fx overskrifter)` : ''}</div>`;
-  html += parsed.map(p => `<div style="margin-top:2px">${toDkDateStr(p.date)} · ${p.time}</div>`).join('');
+  const { unique, duplicates } = splitBulkSlotDuplicates(parsed);
+  let html = `<div>${parsed.length} tid${parsed.length === 1 ? '' : 'er'} genkendt${skipped > 0 ? ` (${skipped} linje${skipped === 1 ? '' : 'r'} sprunget over, fx overskrifter)` : ''}${duplicates.length > 0 ? ` — ${duplicates.length} findes allerede` : ''}</div>`;
+  html += unique.map(p => `<div style="margin-top:2px">${toDkDateStr(p.date)} · ${p.time}</div>`).join('');
+  html += duplicates.map(p => `<div style="margin-top:2px;opacity:0.5;text-decoration:line-through">${toDkDateStr(p.date)} · ${p.time} (findes allerede)</div>`).join('');
   if (el) el.innerHTML = html;
-  if (submitBtn) submitBtn.textContent = parsed.length ? `Opret ${parsed.length} tider` : 'Opret tider';
+  if (submitBtn) submitBtn.textContent = unique.length ? `Opret ${unique.length} tider` : 'Opret tider';
 }
 
 function showBulkAddSlotsModal() {
@@ -4445,16 +4452,42 @@ function showBulkAddSlotsModal() {
   document.getElementById('modal-bulk-add-slots').classList.add('open');
 }
 
+// Rune: "der skal ikke kunne ligges tider ind to gange, så hvis den
+// eksisterer i forvejen skal den ikke ligges ind, ELLER jeg får en
+// advarsel om at tiden er optaget" (2026-09-01) — dropper linjer der
+// matcher en allerede oprettet tid i DATA.bookingSlots, OG linjer der
+// optræder flere gange i selve den indsatte liste. Delt mellem
+// forhåndsvisningen og selve gemningen, så de altid stemmer overens.
+function splitBulkSlotDuplicates(parsed) {
+  const existingKeys = new Set((DATA.bookingSlots || []).map(s => s.date + '|' + s.time));
+  const seenInBatch = new Set();
+  const duplicates = [];
+  const unique = [];
+  parsed.forEach(p => {
+    const key = p.date + '|' + p.time;
+    if (existingKeys.has(key) || seenInBatch.has(key)) {
+      duplicates.push(p);
+    } else {
+      seenInBatch.add(key);
+      unique.push(p);
+    }
+  });
+  return { unique, duplicates };
+}
+
 async function saveBulkSlots() {
   const text = document.getElementById('bulk-slots-text').value;
   const parsed = parseBulkSlotList(text);
   if (!parsed.length) { showToast('Ingen tider genkendt i teksten'); return; }
   if (bulkSlotVisibilityMode === 'udvalgte' && !bulkSlotSelectedClients.size) { showToast('Vælg mindst én klient, eller skift til Skjult/Alle'); return; }
+  const { unique, duplicates } = splitBulkSlotDuplicates(parsed);
+  if (duplicates.length && !confirm(`${duplicates.length} af tiderne findes allerede og springes over. Opret de resterende ${unique.length}?`)) return;
+  if (!unique.length) { showToast('Alle tiderne findes allerede — ingen nye oprettet'); return; }
   const durationMin = parseInt(document.getElementById('bulk-slots-duration').value, 10) || 60;
   const location = document.getElementById('bulk-slots-location').value.trim();
   const visibility = bulkSlotVisibilityMode;
   const targetClientIds = visibility === 'udvalgte' ? [...bulkSlotSelectedClients] : [];
-  const newSlots = parsed.map(p => ({
+  const newSlots = unique.map(p => ({
     id: genId(), date: p.date, time: p.time, durationMin,
     visibility, targetClientIds,
     status: 'ledig', bookedByClientId: null, bookedAt: null, coachSeen: true, note: null, location: location || null,
