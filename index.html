@@ -6154,15 +6154,19 @@ async function resolveExerciseMediaUrl(bucket, path) {
   return data.signedUrl || null;
 }
 
-// kind: 'library-photo' | 'library-video' | 'client-photo' | 'meal-photo'
-// (meal-photo tilføjet 2026-08-31, Supabase-egress-krise — se
-// meal_logs-sektionen i CHANGELOG.md — genbruger samme Edge Function/bucket-
-// uafhængige upload-flow, ikke en ny funktion for hver medietype.)
+// kind: 'library-photo' | 'library-video' | 'client-photo' | 'meal-photo' | 'training-photo'
+// (meal-photo tilføjet 2026-08-31, training-photo samme dag — anden fundne
+// synder i Supabase-egress-krisen, se training_checkins-sektionen i
+// CHANGELOG.md — genbruger samme Edge Function/bucket-uafhængige
+// upload-flow, ikke en ny funktion for hver medietype.)
 async function uploadExerciseMedia(kind, ids, blob) {
   const body = { action: 'upload', kind };
   if (kind === 'meal-photo') {
     body.client_id = ids.clientId;
     body.meal_log_id = ids.mealLogId;
+  } else if (kind === 'training-photo') {
+    body.client_id = ids.clientId;
+    body.training_checkin_id = ids.trainingCheckinId;
   } else {
     body.library_id = ids.libraryId;
     if (kind === 'client-photo') body.client_id = ids.clientId;
@@ -6333,7 +6337,7 @@ function renderDetailHistory(clientId) {
       return `<div class="checkin-card">
         <div class="checkin-header"><div class="checkin-time">${fmtDate(t.date)} · 🏃 Træning gennemført — ${escapeHtml(t.type)}</div></div>
         ${t.rating ? `<div class="score-chip" style="max-width:90px;margin:8px 0 0"><div class="score-val s${t.rating}">${t.rating}</div><div class="score-lbl">Hvordan gik det</div></div>` : ''}
-        ${t.photo ? `<img src="${t.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
+        ${t.photo ? `<img id="training-photo-${t.id}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
         ${t.note ? `<div class="checkin-comment">"${escapeHtml(t.note)}"</div>` : ''}
         ${t.reply ? `<div class="checkin-reply"><div class="reply-lbl">Rune</div>${escapeHtml(t.reply)}</div>` : ''}
         <div class="reply-input-row">
@@ -6416,6 +6420,7 @@ function renderDetailHistory(clientId) {
     </div>`;
   }).join('');
   mls.forEach(m => { if (m.photo) setResolvableImgSrc(document.getElementById(`meal-photo-${m.id}`), m.photo, 'meal-photos'); });
+  tcs.forEach(item => { const t = item.data; if (t.photo) setResolvableImgSrc(document.getElementById(`training-photo-${t.id}`), t.photo, 'training-photos'); });
   // "Samtaler & noter" er den ENESTE sektion som kan være tom OG stadig
   // skal kunne tilføjes til — resten forudsætter data fra andre steder i
   // appen (check-ins/træning/kost logges af klienten selv).
@@ -9859,8 +9864,6 @@ function deleteTrainingCheckinLog(id, clientId, isCoachView) {
 // ══════════════════════════════════════
 // TRÆNING GENNEMFØRT — check-in med type + valgfrit foto
 // ══════════════════════════════════════
-let trainingCheckinPhotoData = null;
-
 let tcRating = 0;
 let tcRunMode = 'normal';
 
@@ -9872,7 +9875,7 @@ function setTcRating(val) {
 
 function openTrainingCheckinModal() {
   const client = DATA.clients.find(c => c.id === currentUser);
-  trainingCheckinPhotoData = null;
+  trainingCheckinPhotoFile = null;
   document.getElementById('tc-photo-preview').innerHTML = '';
   document.getElementById('tc-photo-input').value = '';
   document.getElementById('tc-note').value = '';
@@ -9942,23 +9945,40 @@ function startGpsTrainingFromModal() {
   clientNav('gpstrain');
 }
 
+// Supabase-egress-krise (2026-08-31, anden fundne synder efter meal_logs):
+// billedet gemmes IKKE længere som base64 direkte i databasen — se
+// training_checkins-sektionen i CHANGELOG.md. trainingCheckinPhotoFile
+// holder kun den rå fil til lokal forhåndsvisning; selve uploaden til
+// Storage sker først i saveTrainingCheckin() nedenfor, da Storage-stien
+// kræver et allerede-genereret check-in-id.
+let trainingCheckinPhotoFile = null;
+
 function handleTrainingCheckinPhoto(inputEl) {
   const file = inputEl.files[0];
   if (!file) return;
-  resizeImageFile(file, 700, 0.7, dataUrl => {
-    trainingCheckinPhotoData = dataUrl;
-    document.getElementById('tc-photo-preview').innerHTML =
-      `<img src="${dataUrl}" style="width:90px;height:90px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)">`;
-  });
+  trainingCheckinPhotoFile = file;
+  document.getElementById('tc-photo-preview').innerHTML =
+    `<img src="${URL.createObjectURL(file)}" style="width:90px;height:90px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)">`;
 }
 
-function saveTrainingCheckin() {
+async function saveTrainingCheckin() {
   const date = document.getElementById('tc-date').value || todayLocalStr();
   const type = document.getElementById('tc-type').value;
   const note = document.getElementById('tc-note').value.trim();
   if (!type) { showToast('Vælg en træningstype'); return; }
+  const checkinId = genId();
+  let photo = '';
+  if (trainingCheckinPhotoFile) {
+    const uploaded = await new Promise(resolve => {
+      resizeImageFileToBlob(trainingCheckinPhotoFile, 700, 0.7, async blob => {
+        resolve(await uploadExerciseMedia('training-photo', { clientId: currentUser, trainingCheckinId: checkinId }, blob));
+      });
+    });
+    if (uploaded.error) { alert('Billede-upload fejlede: ' + uploaded.error); return; }
+    photo = uploaded.path;
+  }
   if (!DATA.trainingCheckins) DATA.trainingCheckins = [];
-  const checkin = { id: genId(), clientId: currentUser, date, type, rating: tcRating || null, note, photo: trainingCheckinPhotoData || '', runLogId: null };
+  const checkin = { id: checkinId, clientId: currentUser, date, type, rating: tcRating || null, note, photo, runLogId: null };
   DATA.trainingCheckins.push(checkin);
   const isDistanceType = type === 'Løb' || (DATA.distanceLoggingEnabled && (DATA.distanceTypes || []).includes(type));
   if (isDistanceType) {
