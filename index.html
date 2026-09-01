@@ -8267,6 +8267,11 @@ function weightRecordValue(raw) {
   const s = String(raw).trim();
   const bw = s.match(/^bw:([\d.]+)(?:\+([\d.]+))?$/i);
   if (bw) return { kind: 'bw', value: bw[2] ? parseFloat(bw[2]) : 0 };
+  // Gammel ren "BW" (uden kolon/tal, fra før denne genopbygning, se
+  // parseWeightEntry ovenfor) — faldt tidligere igennem til NaN/null og
+  // blev usynlig for rekord-tjekket. Ingen ekstra-vægt kendt, så 0, samme
+  // som "BW:x" uden ekstra.
+  if (/^bw$/i.test(s)) return { kind: 'bw', value: 0 };
   const sec = s.match(/^sec:([\d.]+)$/i);
   if (sec) return { kind: 'sec', value: parseFloat(sec[1]) };
   const n = parseFloat(s.replace(',', '.'));
@@ -8297,9 +8302,15 @@ async function saveExerciseDetailWeight() {
   // (kg/BW-ekstra/sekunder), ikke kun kg. Kræver mindst én tidligere
   // logning af samme art at slå, ellers ville allerførste logning også
   // tælle som "rekord".
-  const clientForPr = DATA.clients.find(c => c.id === currentExerciseDetail.clientId);
-  const programForPr = clientForPr.programs.find(p => p.id === currentExerciseDetail.programId);
-  const priorHistory = (programForPr.weightLogs && programForPr.weightLogs[currentExerciseDetail.libraryId]) || [];
+  // BRUGER allWeightLogsFor() (på tværs af klientens ALLE programmer), ikke
+  // kun det åbne program — samme rodårsag som "registreringer forsvinder"-
+  // fixet ovenfor (se allWeightLogsFor()): en øvelse der er genbrugt i et
+  // nyere/opdateret program havde sin ældre historik usynlig for netop
+  // dette tjek, selvom den samme historik vises korrekt lige nedenunder
+  // (renderExerciseWeightHistory) — så en ny rekord kunne aldrig udløses
+  // for den slags øvelser. Rune: "ikke alle øvelser fejrer ny rekord —
+  // ser ud til at være hele Upper B" (2026-09-01).
+  const priorHistory = allWeightLogsFor(currentExerciseDetail.clientId, currentExerciseDetail.libraryId);
   const newRecord = weightRecordValue(value);
   const sameKindHistory = priorHistory.map(h => weightRecordValue(h.weight)).filter(v => v && newRecord && v.kind === newRecord.kind);
   const isNewPr = !!newRecord && sameKindHistory.length > 0 && sameKindHistory.every(v => newRecord.value > v.value);
