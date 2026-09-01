@@ -6154,10 +6154,19 @@ async function resolveExerciseMediaUrl(bucket, path) {
   return data.signedUrl || null;
 }
 
-// kind: 'library-photo' | 'library-video' | 'client-photo'
+// kind: 'library-photo' | 'library-video' | 'client-photo' | 'meal-photo'
+// (meal-photo tilføjet 2026-08-31, Supabase-egress-krise — se
+// meal_logs-sektionen i CHANGELOG.md — genbruger samme Edge Function/bucket-
+// uafhængige upload-flow, ikke en ny funktion for hver medietype.)
 async function uploadExerciseMedia(kind, ids, blob) {
-  const body = { action: 'upload', kind, library_id: ids.libraryId };
-  if (kind === 'client-photo') body.client_id = ids.clientId;
+  const body = { action: 'upload', kind };
+  if (kind === 'meal-photo') {
+    body.client_id = ids.clientId;
+    body.meal_log_id = ids.mealLogId;
+  } else {
+    body.library_id = ids.libraryId;
+    if (kind === 'client-photo') body.client_id = ids.clientId;
+  }
   const { data: urlData, error: urlError } = await sb.functions.invoke('exercise-media-urls', { body });
   if (urlError || !urlData || urlData.error) return { path: null, error: (urlData && urlData.error) || 'Kunne ikke klargøre upload' };
   const { bucket, path, token } = urlData;
@@ -6335,9 +6344,14 @@ function renderDetailHistory(clientId) {
     }
     if (item.kind === 'meal') {
       const m = item.data;
+      // Supabase-egress-krise (2026-08-31): m.photo kan nu enten være en
+      // gammel base64-værdi eller en ny, kort Storage-sti — se
+      // isExerciseMediaStoragePath()/setResolvableImgSrc() ovenfor. En
+      // Storage-sti kræver et async opslag efter en signeret URL, derfor
+      // id'et her og resolveMealPhotoImgs()-kaldet efter el.innerHTML.
       return `<div class="checkin-card">
         <div class="checkin-header"><div class="checkin-time">${fmtDate(m.date)}${m.time ? ' · ' + m.time : ''} · 🍽️ ${escapeHtml(m.mealType)}</div></div>
-        ${m.photo ? `<img src="${m.photo}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
+        ${m.photo ? `<img id="meal-photo-${m.id}" style="width:100%;max-width:220px;border-radius:var(--radius-sm);margin:8px 0;display:block;cursor:pointer" onclick="openPhotoViewer(this.src)">` : ''}
         ${m.note ? `<div class="checkin-comment">"${escapeHtml(m.note)}"</div>` : ''}
       </div>`;
     }
@@ -6401,6 +6415,7 @@ function renderDetailHistory(clientId) {
       </div>` : ''}
     </div>`;
   }).join('');
+  mls.forEach(m => { if (m.photo) setResolvableImgSrc(document.getElementById(`meal-photo-${m.id}`), m.photo, 'meal-photos'); });
   // "Samtaler & noter" er den ENESTE sektion som kan være tom OG stadig
   // skal kunne tilføjes til — resten forudsætter data fra andre steder i
   // appen (check-ins/træning/kost logges af klienten selv).
@@ -9995,10 +10010,9 @@ function saveOptionalRunDataFromTrainingCheckin(clientId, date, type) {
 // ══════════════════════════════════════
 // KOST-LOG — måltid + valgfrit foto
 // ══════════════════════════════════════
-let mealLogPhotoData = null;
 
 function openMealLogModal() {
-  mealLogPhotoData = null;
+  mealLogPhotoFile = null;
   document.getElementById('ml-photo-preview').innerHTML = '';
   document.getElementById('ml-photo-input').value = '';
   document.getElementById('ml-note').value = '';
@@ -10064,7 +10078,7 @@ function renderClientMealHistory() {
       weekHtml += `<div class="card-sub" style="font-weight:700;margin:8px 0 4px">${MEAL_DAY_NAMES[new Date(day.date + 'T12:00:00').getDay()]} ${day.date}</div>`
         + dayMeals.map(m => `
         <div class="checkin-card" style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
-          ${m.photo ? `<img src="${m.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;flex-shrink:0">` : ''}
+          ${m.photo ? `<img id="meal-hist-photo-${m.id}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;flex-shrink:0">` : ''}
           <div style="flex:1;min-width:0">
             <div style="font-weight:600">${m.time ? m.time + ' — ' : ''}${escapeHtml(m.mealType)}</div>
             ${m.note ? `<div class="card-sub" style="margin-top:2px">${escapeHtml(m.note)}</div>` : ''}
@@ -10077,6 +10091,9 @@ function renderClientMealHistory() {
   const totalMeals = logs.length;
   html += (totalMeals > shown ? `<div class="card-sub" style="cursor:pointer;color:var(--accent)" onclick="mealLogHistoryVisible += ${ML_HISTORY_VISIBLE_COUNT}; renderClientMealHistory()">Vis flere</div>` : '');
   el.innerHTML = html;
+  // Supabase-egress-krise (2026-08-31): se resolveMealPhotoImgs-kommentaren
+  // ved den tilsvarende coach-visning (renderDetailHistory) — samme grund.
+  logs.forEach(m => { if (m.photo) setResolvableImgSrc(document.getElementById(`meal-hist-photo-${m.id}`), m.photo, 'meal-photos'); });
 }
 
 function deleteMealLog(id) {
@@ -10087,23 +10104,39 @@ function deleteMealLog(id) {
   renderClientMealHistory();
 }
 
+// Supabase-egress-krise (2026-08-31): billedet gemmes IKKE længere som
+// base64 direkte i databasen — se meal_logs-sektionen i CHANGELOG.md.
+// mealLogPhotoFile holder kun den rå fil til lokal forhåndsvisning;
+// selve uploaden til Storage sker først i saveMealLog() nedenfor, da
+// Storage-stien kræver et allerede-genereret måltids-id.
+let mealLogPhotoFile = null;
+
 function handleMealLogPhoto(inputEl) {
   const file = inputEl.files[0];
   if (!file) return;
-  resizeImageFile(file, 700, 0.7, dataUrl => {
-    mealLogPhotoData = dataUrl;
-    document.getElementById('ml-photo-preview').innerHTML =
-      `<img src="${dataUrl}" style="width:90px;height:90px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)">`;
-  });
+  mealLogPhotoFile = file;
+  document.getElementById('ml-photo-preview').innerHTML =
+    `<img src="${URL.createObjectURL(file)}" style="width:90px;height:90px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border)">`;
 }
 
-function saveMealLog() {
+async function saveMealLog() {
   const date = document.getElementById('ml-date').value || todayLocalStr();
   const time = document.getElementById('ml-time').value || '';
   const mealType = document.getElementById('ml-type').value;
   const note = document.getElementById('ml-note').value.trim();
+  const mealLogId = genId();
+  let photo = '';
+  if (mealLogPhotoFile) {
+    const uploaded = await new Promise(resolve => {
+      resizeImageFileToBlob(mealLogPhotoFile, 700, 0.7, async blob => {
+        resolve(await uploadExerciseMedia('meal-photo', { clientId: currentUser, mealLogId }, blob));
+      });
+    });
+    if (uploaded.error) { alert('Billede-upload fejlede: ' + uploaded.error); return; }
+    photo = uploaded.path;
+  }
   if (!DATA.mealLogs) DATA.mealLogs = [];
-  DATA.mealLogs.push({ id: genId(), clientId: currentUser, date, time, mealType, note, photo: mealLogPhotoData || '' });
+  DATA.mealLogs.push({ id: mealLogId, clientId: currentUser, date, time, mealType, note, photo });
   save();
   closeModal('modal-meal-log');
   showToast('Måltid logget');
