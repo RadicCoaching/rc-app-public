@@ -4399,13 +4399,9 @@ function formatBulkSlotList(slots) {
   return ['Reserverede tider', ...lines].join('\n');
 }
 
-async function shareReservedSlotsAsText() {
-  const now = todayLocalStr();
-  const reserved = (DATA.bookingSlots || [])
-    .filter(s => s.status !== 'booket' && s.visibility !== 'udvalgte' && s.date >= now)
-    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  if (!reserved.length) return;
-  const text = formatBulkSlotList(reserved);
+async function shareSlotsAsText(slots) {
+  if (!slots.length) return;
+  const text = formatBulkSlotList(slots);
   if (navigator.share) {
     try { await navigator.share({ text }); } catch (err) { /* brugeren annullerede delingen — ikke en fejl */ }
   } else if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -4418,6 +4414,27 @@ async function shareReservedSlotsAsText() {
   } else {
     showToast('Deling understøttes ikke i denne browser');
   }
+}
+
+function shareReservedSlotsAsText() {
+  const now = todayLocalStr();
+  const reserved = (DATA.bookingSlots || [])
+    .filter(s => s.status !== 'booket' && !s.customName && s.visibility !== 'udvalgte' && s.date >= now)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  return shareSlotsAsText(reserved);
+}
+
+// Parity-fund (2026-09-01, under det grundige gennemtjek): rc-mobile fik
+// denne 2026-08-31 (Rune: "Dedikerede tider, dem der er ledige, kan jeg
+// downloade den liste til noter?"), men blev aldrig porteret til web —
+// "Del"-knappen sad hardkodet til kun Reserveret-gruppen (se
+// slotGroupHtml()). Samme funktion, bare filtreret til Dedikeret-gruppen.
+function shareDedicatedSlotsAsText() {
+  const now = todayLocalStr();
+  const dedicated = (DATA.bookingSlots || [])
+    .filter(s => s.status !== 'booket' && !s.customName && s.visibility === 'udvalgte' && s.date >= now)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  return shareSlotsAsText(dedicated);
 }
 
 function renderBulkSlotsPreview() {
@@ -4801,10 +4818,14 @@ function toggleSlotWeek(weekKey) {
 function slotGroupHtml(key, label, color, items) {
   if (!items.length) return '';
   const collapsed = collapsedSlotGroups.has(key);
-  // "Del"-knappen findes kun på Reserveret-gruppen (Rune bad specifikt om at
-  // kunne trække reserverede tider ud til en note, til klienter uden for appen).
-  const shareBtn = key === 'reserveret'
-    ? `<button type="button" class="btn-icon" title="Del som tekst" style="margin-right:10px" onclick="event.stopPropagation();shareReservedSlotsAsText()">📤</button>`
+  // "Del"-knappen findes på Reserveret (Rune bad om at kunne trække
+  // reserverede tider ud til en note, til klienter uden for appen) OG
+  // Dedikeret (samme behov, tilføjet 2026-08-31 — se
+  // shareDedicatedSlotsAsText()) — ikke på Optaget, som allerede er bookede
+  // tider, ikke en liste at dele videre.
+  const shareFn = key === 'reserveret' ? 'shareReservedSlotsAsText' : key === 'dedikeret' ? 'shareDedicatedSlotsAsText' : null;
+  const shareBtn = shareFn
+    ? `<button type="button" class="btn-icon" title="Del som tekst" style="margin-right:10px" onclick="event.stopPropagation();${shareFn}()">📤</button>`
     : '';
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin:16px 0 8px;user-select:none" onclick="toggleSlotGroup('${key}')">
     <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.08em">${label} (${items.length})</div>
