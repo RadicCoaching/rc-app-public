@@ -6188,10 +6188,12 @@ async function resolveExerciseMediaUrl(bucket, path) {
 }
 
 // kind: 'library-photo' | 'library-video' | 'client-photo' | 'meal-photo' | 'training-photo'
-// (meal-photo tilføjet 2026-08-31, training-photo samme dag — anden fundne
-// synder i Supabase-egress-krisen, se training_checkins-sektionen i
-// CHANGELOG.md — genbruger samme Edge Function/bucket-uafhængige
-// upload-flow, ikke en ny funktion for hver medietype.)
+//       | 'tanita-photo' | 'celebration-photo'
+// (meal-photo tilføjet 2026-08-31, training-photo samme dag, tanita-photo +
+// celebration-photo 2026-09-01 — samme rodårsag, fundet under et grundigt
+// gennemtjek for at undgå gentagelser, se CHANGELOG.md — genbruger samme
+// Edge Function/bucket-uafhængige upload-flow, ikke en ny funktion for
+// hver medietype.)
 async function uploadExerciseMedia(kind, ids, blob) {
   const body = { action: 'upload', kind };
   if (kind === 'meal-photo') {
@@ -6200,6 +6202,11 @@ async function uploadExerciseMedia(kind, ids, blob) {
   } else if (kind === 'training-photo') {
     body.client_id = ids.clientId;
     body.training_checkin_id = ids.trainingCheckinId;
+  } else if (kind === 'tanita-photo') {
+    body.client_id = ids.clientId;
+    body.scan_id = ids.scanId;
+  } else if (kind === 'celebration-photo') {
+    // Ingen client_id/library_id — kun én fil nogensinde, fast sti (se Edge Function).
   } else {
     body.library_id = ids.libraryId;
     if (kind === 'client-photo') body.client_id = ids.clientId;
@@ -7590,17 +7597,22 @@ async function addClient() {
   showSetupCodeModal(name, code);
 }
 
-let celebrationPhotoDraft = null;
+// 2026-09-01 (Supabase-egress-krise, samme gennemgang som fandt
+// training_checkins/tanita_scans): celebrationPhotoFile holder nu kun den
+// rå fil til lokal forhåndsvisning (samme mønster som mealLogPhotoFile) —
+// selve uploaden til Storage sker først i saveCoachSettings().
+let celebrationPhotoFile = null;
 
 function showCoachSettings() {
   document.getElementById('settings-offline-msg').value = DATA.coachStatus.offlineMsg;
   document.getElementById('settings-pin').value = '';
-  celebrationPhotoDraft = null;
+  celebrationPhotoFile = null;
   document.getElementById('settings-celebration-photo-input').value = '';
   const preview = document.getElementById('settings-celebration-photo-preview');
   preview.innerHTML = DATA.coachCelebrationPhoto
-    ? `<img src="${DATA.coachCelebrationPhoto}" style="width:70px;height:70px;object-fit:cover;border-radius:50%;border:1px solid var(--border)">`
+    ? `<img id="settings-celebration-photo-img" style="width:70px;height:70px;object-fit:cover;border-radius:50%;border:1px solid var(--border)">`
     : '<div class="card-sub">Intet billede valgt — bruger emoji i stedet</div>';
+  if (DATA.coachCelebrationPhoto) setResolvableImgSrc(document.getElementById('settings-celebration-photo-img'), DATA.coachCelebrationPhoto, 'exercise-photos');
   document.getElementById('modal-coach-settings').classList.add('open');
   refreshPushStatusUI();
 }
@@ -7608,11 +7620,9 @@ function showCoachSettings() {
 function handleCelebrationPhotoUpload(inputEl) {
   const file = inputEl.files[0];
   if (!file) return;
-  resizeImageFile(file, 400, 0.75, dataUrl => {
-    celebrationPhotoDraft = dataUrl;
-    document.getElementById('settings-celebration-photo-preview').innerHTML =
-      `<img src="${dataUrl}" style="width:70px;height:70px;object-fit:cover;border-radius:50%;border:1px solid var(--border)">`;
-  });
+  celebrationPhotoFile = file;
+  document.getElementById('settings-celebration-photo-preview').innerHTML =
+    `<img src="${URL.createObjectURL(file)}" style="width:70px;height:70px;object-fit:cover;border-radius:50%;border:1px solid var(--border)">`;
 }
 
 // NYT (session 11) — global test-toggle for km/tid-logning på flere aktivitetstyper.
@@ -7632,12 +7642,21 @@ function saveTanitaScanLimit(val) {
   showToast('Scanningsgrænse gemt');
 }
 
-function saveCoachSettings() {
+async function saveCoachSettings() {
   const pin = document.getElementById('settings-pin').value.trim();
   const msg = document.getElementById('settings-offline-msg').value.trim();
   if (pin && pin.length === PIN_LENGTH) DATA.coachPin = pin;
   if (msg) DATA.coachStatus.offlineMsg = msg;
-  if (celebrationPhotoDraft) DATA.coachCelebrationPhoto = celebrationPhotoDraft;
+  if (celebrationPhotoFile) {
+    const uploaded = await new Promise(resolve => {
+      resizeImageFileToBlob(celebrationPhotoFile, 400, 0.75, async blob => {
+        resolve(await uploadExerciseMedia('celebration-photo', {}, blob));
+      });
+    });
+    if (uploaded.error) { alert('Billede-upload fejlede: ' + uploaded.error); return; }
+    DATA.coachCelebrationPhoto = uploaded.path;
+    celebrationPhotoFile = null;
+  }
   save();
   closeModal('modal-coach-settings');
   showToast('Indstillinger gemt');
@@ -9514,8 +9533,9 @@ function showCelebration(messages) {
     messages.map(m => `<div style="margin-bottom:8px;font-weight:700;font-size:16px">${escapeHtml(m)}</div>`).join('');
   const photoWrap = document.getElementById('celebration-photo-wrap');
   photoWrap.innerHTML = DATA.coachCelebrationPhoto
-    ? `<img src="${DATA.coachCelebrationPhoto}" style="width:110px;height:110px;object-fit:cover;border-radius:50%;border:3px solid var(--accent);margin:0 auto 14px;display:block">`
+    ? `<img id="celebration-modal-photo" style="width:110px;height:110px;object-fit:cover;border-radius:50%;border:3px solid var(--accent);margin:0 auto 14px;display:block">`
     : `<div style="font-size:52px;margin-bottom:10px">🎉🚩💐👍</div>`;
+  if (DATA.coachCelebrationPhoto) setResolvableImgSrc(document.getElementById('celebration-modal-photo'), DATA.coachCelebrationPhoto, 'exercise-photos');
   document.getElementById('modal-celebration').classList.add('open');
 }
 
@@ -10276,13 +10296,19 @@ function renderTanitaPastScans() {
       const expanded = tsExpandedScanId === String(s.id);
       const valueRows = (s.values || []).map(v => `<div style="display:flex;justify-content:space-between;padding:4px 0"><span>${escapeHtml(v.label)}</span><strong>${escapeHtml(String(v.value))}${v.unit ? ' ' + escapeHtml(v.unit) : ''}</strong></div>`).join('');
       const photoHtml = s.photo_url
-        ? `<img src="${s.photo_url}" style="width:100%;max-height:260px;object-fit:contain;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:8px">`
+        ? `<img id="tanita-photo-${s.id}" style="width:100%;max-height:260px;object-fit:contain;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:8px">`
         : '<div class="card-sub">Intet foto gemt for denne scanning.</div>';
       return `<div class="card-sub" style="margin-bottom:6px;cursor:pointer" onclick="toggleTanitaPastScan(${JSON.stringify(String(s.id))})">
         ${fmtDate(s.date)} — ${escapeHtml(summary)} ${expanded ? '▲' : '▼'}
         ${expanded ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">${photoHtml}${valueRows}</div>` : ''}
       </div>`;
     }).join('');
+  // Kun den udfoldede scannings billede slås op — matcher den eksisterende
+  // "kun udfoldet foto vises"-adfærd, i stedet for at hente alle på én gang.
+  const expandedScan = tsPastScans.find(s => String(s.id) === tsExpandedScanId);
+  if (expandedScan && expandedScan.photo_url) {
+    setResolvableImgSrc(document.getElementById(`tanita-photo-${expandedScan.id}`), expandedScan.photo_url, 'tanita-photos');
+  }
 }
 
 function toggleTanitaPastScan(id) {
@@ -10290,6 +10316,11 @@ function toggleTanitaPastScan(id) {
   renderTanitaPastScans();
 }
 
+// tsPhotoDataUrl holdes STADIG som base64 (ikke omdøbt) — den sendes direkte
+// til analyze-tanita-scan (AI-analyse), en ren, forbigående brug der aldrig
+// rører databasen. Kun selve DATABASE-gemningen (saveTanitaScan()) er
+// rettet til at bruge Storage i stedet, se dér (2026-09-01, samme
+// gennemgang som fandt training_checkins).
 function handleTanitaScanPhoto(inputEl) {
   const file = inputEl.files[0];
   if (!file) return;
@@ -10359,13 +10390,21 @@ async function saveTanitaScan() {
   // hørende til en tidligere dato. Datofeltet defaulter til i dag men kan
   // ændres, se renderTanitaResult().
   const scanDate = document.getElementById('ts-scan-date').value || todayLocalStr();
+  const scanId = genId();
+  let photoPath = '';
+  if (tsPhotoDataUrl) {
+    const blob = await (await fetch(tsPhotoDataUrl)).blob();
+    const uploaded = await uploadExerciseMedia('tanita-photo', { clientId: tsTargetClientId, scanId }, blob);
+    if (uploaded.error) { showToast('⚠ Billede-upload fejlede: ' + uploaded.error); return; }
+    photoPath = uploaded.path;
+  }
   const { error } = await sb.from('tanita_scans').insert({
-    id: genId(),
+    id: scanId,
     client_id: tsTargetClientId,
     date: scanDate,
     weight_kg: tsResult.weight_kg,
     bmi: tsResult.bmi,
-    photo_url: tsPhotoDataUrl,
+    photo_url: photoPath,
     values: tsResult.values || [],
     created_by: isCoachViewer ? 'coach' : 'client'
   });
