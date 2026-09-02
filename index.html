@@ -4282,12 +4282,18 @@ function renderClientVisibilityList(prefix) {
   if (!DATA.clients.length) { el.innerHTML = '<div class="card-sub" style="padding:10px 0">Ingen klienter oprettet endnu.</div>'; return; }
   if (!clientGroupsSessionCache) { ensureClientGroupsLoaded(() => renderClientVisibilityList(prefix)); }
   const groupNames = clientGroupsSessionCache ? clientGroupsSessionCache.names : [];
-  const groupsHtml = groupNames.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:4px">
+  // Rune: "ikke særligt åbenlyst at finde" — gjort til sin egen tydeligt
+  // mærkede sektion (overskrift + knap-agtige chips), i stedet for at
+  // ligge som en diskret linje ovenpå klient-listen.
+  const groupsHtml = groupNames.length ? `<div style="padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:4px">
+    <div class="card-sub" style="margin-bottom:8px">👥 Vælg en gruppe med ét tryk</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
     ${groupNames.map(g => {
       const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(g));
       const allIn = members.length > 0 && members.every(c => set.has(c.id));
-      return `<span class="ss-tag${allIn ? ' active' : ''}" style="cursor:pointer" onclick="toggleModalGroupSelection('${prefix}', ${JSON.stringify(g)})">👥 ${escapeHtml(g)}</span>`;
+      return `<button type="button" class="btn btn-sm${allIn ? ' btn-primary' : ''}" onclick="toggleModalGroupSelection('${prefix}', ${JSON.stringify(g)})">${escapeHtml(g)}</button>`;
     }).join('')}
+    </div>
   </div>` : '';
   el.innerHTML = groupsHtml + DATA.clients.map(c => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
@@ -4316,6 +4322,13 @@ function renderSlotVisibilityUI(prefix) {
 function showAddSlotModal() {
   addSlotVisibilityMode = 'alle'; // samme udgangspunkt som tidligere ("Alle klienter")
   addSlotSelectedClients = new Set();
+  // Tving frisk gruppe-data ved hver ny åbning af formularen — Rune
+  // oplevede at en gruppe hun lige havde redigeret et andet sted stadig
+  // viste den GAMLE medlemsliste her, fordi cachen kun blev ryddet ved
+  // selve redigeringen, ikke nødvendigvis nået at være committet server-
+  // side endnu. Kun genbrugt INDEN i én åben formular (mellem tryk på
+  // chips), aldrig på tværs af to forskellige åbninger.
+  clientGroupsSessionCache = null;
   renderSlotVisibilityUI('add');
   document.getElementById('slot-date').value = todayLocalStr();
   document.getElementById('slot-time').value = '';
@@ -4554,6 +4567,7 @@ function renderBulkSlotsPreview() {
 function showBulkAddSlotsModal() {
   bulkSlotVisibilityMode = 'alle';
   bulkSlotSelectedClients = new Set();
+  clientGroupsSessionCache = null; // se kommentar i showAddSlotModal()
   renderSlotVisibilityUI('bulk');
   document.getElementById('bulk-slots-text').value = '';
   document.getElementById('bulk-slots-duration').value = 60;
@@ -5028,6 +5042,7 @@ function renderCoachBookingSlots() {
 // den valgte indstilling bliver sat ens for ALLE de valgte tider ved "Gem".
 function openSlotVisibilityModal() {
   if (!slotEditSelection.size) return;
+  clientGroupsSessionCache = null; // se kommentar i showAddSlotModal()
   if (slotEditSelection.size === 1) {
     const s = DATA.bookingSlots.find(x => x.id === [...slotEditSelection][0]);
     editSlotVisibilityMode = (s && s.visibility) || 'alle';
@@ -7891,26 +7906,36 @@ async function toggleGroupMember(clientId, name) {
 // ══════════════════════════════════════
 let groupMessageSelected = new Set();
 
-function openGroupMessageComposer() {
+async function openGroupMessageComposer() {
   // "Alle" udgangspunkt: alle klienter UDEN aktiv afslutningsfrist.
   groupMessageSelected = new Set(DATA.clients.filter(c => !c.dataRetentionUntil).map(c => c.id));
   document.getElementById('group-message-text').value = '';
   document.getElementById('group-message-error').style.display = 'none';
-  if (!clientGroupsSessionCache) ensureClientGroupsLoaded(renderGroupMessageComposer);
-  renderGroupMessageComposer();
+  // Rune: "dem jeg har valgt i gruppen ikke de samme jeg ser under
+  // beskeder" — RETTET (2026-09-02): tving frisk gruppe-data ved hver
+  // åbning (samme som booking-formularerne nu gør), OG vent på at den
+  // rent faktisk er hentet FØR compose-visningen tegnes, i stedet for at
+  // tegne den to gange (først tom, så igen når svaret kom) — det
+  // race-vindue kunne vise "ingen grupper" hvis man nåede at kigge før
+  // anden tegning nåede frem.
+  clientGroupsSessionCache = null;
   document.getElementById('modal-group-message').classList.add('open');
+  document.getElementById('group-message-groups').innerHTML = '<div class="card-sub">Henter grupper…</div>';
+  await ensureClientGroupsLoaded(() => {});
+  renderGroupMessageComposer();
 }
 
 function renderGroupMessageComposer() {
   document.getElementById('group-message-count').textContent = `${groupMessageSelected.size} valgt`;
   const groupNames = clientGroupsSessionCache ? clientGroupsSessionCache.names : [];
   document.getElementById('group-message-groups').innerHTML = groupNames.length
-    ? groupNames.map(g => {
+    ? `<div class="card-sub" style="margin-bottom:8px">👥 Vælg en gruppe med ét tryk</div>
+       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px">${groupNames.map(g => {
         const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(g));
         const allIn = members.length > 0 && members.every(c => groupMessageSelected.has(c.id));
-        return `<span class="ss-tag${allIn ? ' active' : ''}" style="cursor:pointer" onclick="toggleGroupMessageGroup(${JSON.stringify(g)})">👥 ${escapeHtml(g)}</span>`;
-      }).join('')
-    : '';
+        return `<button type="button" class="btn btn-sm${allIn ? ' btn-primary' : ''}" onclick="toggleGroupMessageGroup(${JSON.stringify(g)})">${escapeHtml(g)}</button>`;
+      }).join('')}</div>`
+    : '<div class="card-sub" style="margin-bottom:4px">Ingen grupper oprettet endnu — se ⚙ Indstillinger → Administrer grupper.</div>';
   document.getElementById('group-message-clients').innerHTML = DATA.clients.map(c => {
     const active = groupMessageSelected.has(c.id);
     return `<span class="ss-tag${active ? ' active' : ''}" style="cursor:pointer" onclick="toggleGroupMessageClient(${c.id})">${escapeHtml(c.name)}${c.dataRetentionUntil ? ' ⏳' : ''}</span>`;
