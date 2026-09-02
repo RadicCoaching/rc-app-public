@@ -4951,9 +4951,13 @@ function slotGroupHtml(key, label, color, items) {
   // bulk-synligheds-redigering). Genbruger den eksisterende
   // slotEditSelection — markerer/afmarkerer bare ALLE denne gruppes
   // id'er på én gang, samme "Rediger synlighed for X valgte"-knap
-  // nedenfor virker uændret bagefter.
+  // nedenfor virker uændret bagefter. RETTET (2026-09-02, 2. runde):
+  // først en diskret ikon-knap (☑️ uden synlig tekst) — Rune fandt den
+  // ikke. Erstattet med en rigtig tekst-knap, samme lektion som
+  // gruppe-genvejene tidligere (ikoner uden label bliver overset).
+  const allSlotsInGroupSelected = items.length > 0 && items.every(s => slotEditSelection.has(s.id));
   const selectAllBtn = (key === 'reserveret' || key === 'dedikeret')
-    ? `<button type="button" class="btn-icon" title="Vælg/fravælg alle i denne gruppe" style="margin-right:10px" onclick="event.stopPropagation();selectAllSlotsInGroup(${JSON.stringify(items.map(s => s.id))})">☑️</button>`
+    ? `<button type="button" class="btn btn-sm" style="margin-right:10px" onclick="event.stopPropagation();selectAllSlotsInGroup(${JSON.stringify(items.map(s => s.id))})">${allSlotsInGroupSelected ? 'Fravælg alle' : 'Vælg alle'}</button>`
     : '';
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin:16px 0 8px;user-select:none" onclick="toggleSlotGroup('${key}')">
     <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.08em">${label} (${items.length})</div>
