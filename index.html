@@ -4505,12 +4505,27 @@ function formatBulkSlotList(slots) {
   return ['Reserverede tider', ...lines].join('\n');
 }
 
+// RETTET (2026-09-02): Rune rapporterede at "Del som tekst" ikke længere
+// gjorde noget. Root cause: catch-blokken antog at ENHVER fejl fra
+// navigator.share() betød "brugeren lukkede delings-vinduet selv" og
+// skjulte den derfor helt — men kun en ægte AbortError betyder det.
+// Browsere der fx afviser tekst-only deling (ingen url/files) kastede en
+// anden fejltype, som blev slugt lige så stille, og knappen så ud til
+// slet ikke at gøre noget. Falder nu i stedet tilbage til udklipsholder
+// ved enhver fejl der IKKE er en reel annullering.
 async function shareSlotsAsText(slots) {
-  if (!slots.length) return;
+  if (!slots.length) { showToast('Ingen tider at dele'); return; }
   const text = formatBulkSlotList(slots);
   if (navigator.share) {
-    try { await navigator.share({ text }); } catch (err) { /* brugeren annullerede delingen — ikke en fejl */ }
-  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.share({ text });
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      // Fald igennem til udklipsholder-forsøget nedenfor.
+    }
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
     try {
       await navigator.clipboard.writeText(text);
       showToast('Kopieret til udklipsholder');
@@ -5320,13 +5335,23 @@ function wrapICS(eventsArr) {
   return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Radich Coaching//Booking//DA', ...eventsArr, 'END:VCALENDAR'].join('\r\n');
 }
 
+// RETTET (2026-09-02): Rune rapporterede at "Download alle aftaler"-knappen
+// ikke gjorde noget. downloadICSFile() havde ingen fejl-håndtering
+// overhovedet — en hvilken som helst kastet fejl (fx et forkert
+// filnavn/tegn, eller en browser der blokerer Blob-download) ville stoppe
+// funktionen midt i, uden nogen synlig fejl til Rune. Tilføjet try/catch
+// + toast, så en fremtidig fejl bliver synlig i stedet for stille.
 function downloadICSFile(filename, content) {
-  const blob = new Blob([content], { type: 'text/calendar' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const blob = new Blob([content], { type: 'text/calendar' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showToast('Download mislykkedes — prøv igen');
+  }
 }
 
 function downloadSlotICS(slotId) {
@@ -5394,14 +5419,18 @@ function downloadAppointmentICS(aptId) {
 }
 
 function downloadAllAppointmentsICS() {
-  const now = todayLocalStr();
-  const isCoach = currentUser === 'coach';
-  const apts = DATA.appointments.concat(bookedSlotsAsAppointments())
-    .filter(a => a.date >= now && (isCoach || a.clientId === currentUser))
-    .sort((a,b) => a.date.localeCompare(b.date));
-  if (!apts.length) { showToast('Ingen kommende aftaler'); return; }
-  const events = apts.map(a => appointmentToICSEvent(a, a.clientId ? DATA.clients.find(c => c.id === a.clientId) : null));
-  downloadICSFile('rc-aftaler.ics', wrapICS(events));
+  try {
+    const now = todayLocalStr();
+    const isCoach = currentUser === 'coach';
+    const apts = DATA.appointments.concat(bookedSlotsAsAppointments())
+      .filter(a => a.date >= now && (isCoach || a.clientId === currentUser))
+      .sort((a,b) => a.date.localeCompare(b.date));
+    if (!apts.length) { showToast('Ingen kommende aftaler'); return; }
+    const events = apts.map(a => appointmentToICSEvent(a, a.clientId ? DATA.clients.find(c => c.id === a.clientId) : null));
+    downloadICSFile('rc-aftaler.ics', wrapICS(events));
+  } catch (err) {
+    showToast('Kunne ikke downloade aftalerne — prøv igen');
+  }
 }
 
 function downloadTextFile(filename, content) {
