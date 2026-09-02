@@ -150,6 +150,10 @@ input,textarea,select{font-family:'Inter',sans-serif;font-size:14px}
 .exercise-row-badge{font-size:15px;font-weight:700;color:var(--gray);flex-shrink:0;white-space:nowrap}
 .exercise-row-badge.has-weight{color:var(--accent);font-family:'Inter',sans-serif;font-size:18px}
 .ss-tag{display:inline-block;font-size:11px;font-weight:700;color:var(--accent-blue);background:rgba(59,75,227,0.14);padding:2px 6px;border-radius:4px;margin-left:6px;text-transform:uppercase;letter-spacing:.03em;vertical-align:middle}
+/* Toggle-tilstand for .ss-tag brugt som vælgbar chip (klient-grupper,
+   gruppebeskeder) — samme accent-baggrund/mørk-tekst-princip som resten
+   af appens "valgt"-tilstande. */
+.ss-tag.active{color:var(--dark);background:var(--accent)}
 .ss-select{background:var(--dark);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;outline:none;flex-shrink:0}
 
 /* ── FORM ELEMENTS ── */
@@ -372,6 +376,7 @@ body::before{
     <div class="topbar">
       <span class="topbar-logo">RC.</span>
       <span class="topbar-title" id="messages-topbar-title">Beskeder</span>
+      <button class="topbar-action" id="group-message-btn" title="Ny gruppebesked" onclick="openGroupMessageComposer()">✉️</button>
       <button class="topbar-action" title="Hent nyeste beskeder" onclick="manualRefreshMessages()">⟳</button>
     </div>
     <div class="content">
@@ -1007,9 +1012,45 @@ body::before{
     <button class="btn btn-block" style="margin-bottom:12px;font-size:13px" onclick="registerBiometric('coach', 'coach')">🔓 Aktivér Face ID/fingeraftryk-login på denne enhed</button>
     <button class="btn btn-block" style="margin-bottom:4px;font-size:13px" onclick="enablePushNotifications()">🔔 Aktivér notifikationer på denne enhed</button>
     <div id="push-status" class="card-sub push-status-el" style="margin-bottom:12px">Tjekker status...</div>
+    <button class="btn btn-block" style="margin-bottom:4px;font-size:13px" onclick="closeModal('modal-coach-settings'); showClientGroupsModal();">👥 Administrer grupper</button>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('modal-coach-settings')">Annuller</button>
       <button class="btn btn-primary" onclick="saveCoachSettings()">Gem</button>
+    </div>
+  </div>
+</div>
+
+<!-- Klient-grupper (2026-09-02) — gruppebeskeder + genvej ved synlighed på
+     ledige tider, se ClientGroupsScreen.tsx i rc-mobile for parity. -->
+<div class="modal-overlay" id="modal-client-groups">
+  <div class="modal">
+    <div class="modal-title">Grupper</div>
+    <div class="card-sub" style="margin-bottom:14px">Genbruges til gruppebeskeder og som genvej ved synlighed på ledige tider — klik en gruppe for at vælge dens medlemmer.</div>
+    <div id="client-groups-list"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin:10px 0">
+      <input type="text" id="new-client-group-name" placeholder="Ny gruppe, fx 'Første prioritet'" style="flex:1" onkeydown="if(event.key==='Enter')addClientGroup()">
+      <button class="btn btn-sm" onclick="addClientGroup()">+ Tilføj</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeModal('modal-client-groups')">Luk</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gruppebesked (2026-09-02) — sender N almindelige enkelt-beskeder,
+     samme felter som sendCoachMessage(), ikke én delt broadcast-række.
+     Se rc-mobiles CoachMessagesScreen.tsx for samme funktion portet. -->
+<div class="modal-overlay" id="modal-group-message">
+  <div class="modal">
+    <div class="modal-title">Gruppebesked</div>
+    <div class="card-sub" id="group-message-count" style="margin-bottom:10px">0 valgt</div>
+    <div id="group-message-groups" style="margin-bottom:8px"></div>
+    <div id="group-message-clients" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
+    <div class="field"><label>Besked</label><textarea id="group-message-text" placeholder="Skriv beskeden…"></textarea></div>
+    <div class="card-sub" id="group-message-error" style="color:var(--danger);display:none;margin-bottom:8px"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-group-message')">Annullér</button>
+      <button class="btn btn-primary" id="group-message-send-btn" onclick="sendGroupMessage()">Send</button>
     </div>
   </div>
 </div>
@@ -3903,13 +3944,16 @@ function scoreSummaryText(ci) {
 function renderAllCheckins() {
   const el = document.getElementById('all-checkins-list');
   const titleEl = document.getElementById('messages-topbar-title');
+  const groupBtn = document.getElementById('group-message-btn');
   if (currentMessagesClientId != null) {
     const client = DATA.clients.find(c => c.id === currentMessagesClientId);
     if (titleEl) titleEl.textContent = client ? client.name : 'Beskeder';
+    if (groupBtn) groupBtn.style.display = 'none';
     renderMessagesThread(currentMessagesClientId, el);
     return;
   }
   if (titleEl) titleEl.textContent = 'Beskeder';
+  if (groupBtn) groupBtn.style.display = '';
   renderMessagesClientList(el);
 }
 
@@ -4200,12 +4244,52 @@ function toggleModalClientSelection(prefix, clientId) {
   renderClientVisibilityList(prefix);
 }
 
+function toggleModalGroupSelection(prefix, groupName) {
+  if (!clientGroupsSessionCache) return;
+  const { set } = slotVisState(prefix);
+  const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(groupName));
+  const allIn = members.length > 0 && members.every(c => set.has(c.id));
+  members.forEach(c => (allIn ? set.delete(c.id) : set.add(c.id)));
+  renderClientVisibilityList(prefix);
+}
+
+// Genvej til "udvalgte" via en gemt gruppe (se klient-grupper-modulet
+// ovenfor) — Rune: "Ellers skal jeg hver gang vælge dem der har første
+// prioritet i stedet for at sætte dem i en gruppe for sig." Lille, delt
+// cache (ikke en del af DATA/full-sync, samme princip som resten af
+// gruppe-funktionen) — loades én gang, genbruges af alle tre
+// synligheds-formularer (ny/bulk/redigér).
+let clientGroupsSessionCache = null; // { names: string[], byClient: {id: string[]} } | null
+
+// Delt af booking-synligheds-vælgeren OG gruppebesked-composeren — begge
+// kalder denne, med deres egen re-render-funktion, når cachen mangler.
+async function ensureClientGroupsLoaded(onLoaded) {
+  if (clientGroupsSessionCache) return;
+  const [coachRes, clientsRes] = await Promise.all([
+    sb.from('coach_status').select('client_groups').eq('id', 1).single(),
+    sb.from('clients').select('id, groups'),
+  ]);
+  const byClient = {};
+  (clientsRes.data || []).forEach(c => { byClient[c.id] = c.groups || []; });
+  clientGroupsSessionCache = { names: (coachRes.data && coachRes.data.client_groups) || [], byClient };
+  onLoaded();
+}
+
 function renderClientVisibilityList(prefix) {
   const { set } = slotVisState(prefix);
   const el = document.getElementById(prefix + '-vis-clients-list');
   if (!el) return;
   if (!DATA.clients.length) { el.innerHTML = '<div class="card-sub" style="padding:10px 0">Ingen klienter oprettet endnu.</div>'; return; }
-  el.innerHTML = DATA.clients.map(c => `
+  if (!clientGroupsSessionCache) { ensureClientGroupsLoaded(() => renderClientVisibilityList(prefix)); }
+  const groupNames = clientGroupsSessionCache ? clientGroupsSessionCache.names : [];
+  const groupsHtml = groupNames.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:4px">
+    ${groupNames.map(g => {
+      const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(g));
+      const allIn = members.length > 0 && members.every(c => set.has(c.id));
+      return `<span class="ss-tag${allIn ? ' active' : ''}" style="cursor:pointer" onclick="toggleModalGroupSelection('${prefix}', ${JSON.stringify(g)})">👥 ${escapeHtml(g)}</span>`;
+    }).join('')}
+  </div>` : '';
+  el.innerHTML = groupsHtml + DATA.clients.map(c => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
       <span class="toggle-label"><strong>${escapeHtml(c.name)}</strong></span>
       <button type="button" class="toggle ${set.has(c.id) ? 'on' : ''}" onclick="toggleModalClientSelection('${prefix}', ${c.id})"></button>
@@ -7690,6 +7774,197 @@ async function saveCoachSettings() {
   save();
   closeModal('modal-coach-settings');
   showToast('Indstillinger gemt');
+}
+
+// ══════════════════════════════════════
+// KLIENT-GRUPPER (2026-09-02) — Rune: "gruppe beskeder... vil også gerne
+// kunne gruppere hvem 'alle' er... Synlighed på ledige tider vil jeg også
+// gerne kunne gruppere." Genbruges to steder (gruppebeskeder i
+// Beskeder-fanen, og en genvej i "udvalgte"-synligheds-vælgeren på ledige
+// tider) — se rc-mobiles ClientGroupsScreen.tsx for samme funktion portet.
+//
+// Skriver BEVIDST direkte til Supabase, uden om DATA/save()-systemet
+// (samme princip som Tanita-scanninger) — en admin-handling der kun
+// giver mening online, ikke værd at true hele den store periodiske
+// fuld-synkronisering igennem for to nye jsonb-felter.
+// ══════════════════════════════════════
+let clientGroupNames = [];
+let clientGroupsClients = []; // {id, name, groups}
+let expandedClientGroup = null;
+
+async function showClientGroupsModal() {
+  document.getElementById('modal-client-groups').classList.add('open');
+  document.getElementById('client-groups-list').innerHTML = '<div class="card-sub">Henter…</div>';
+  await loadClientGroupsModal();
+}
+
+async function loadClientGroupsModal() {
+  const [coachRes, clientsRes] = await Promise.all([
+    sb.from('coach_status').select('client_groups').eq('id', 1).single(),
+    sb.from('clients').select('id, name, groups').order('name'),
+  ]);
+  clientGroupNames = (coachRes.data && coachRes.data.client_groups) || [];
+  clientGroupsClients = (clientsRes.data || []).map(c => ({ id: c.id, name: c.name, groups: c.groups || [] }));
+  renderClientGroups();
+}
+
+function renderClientGroups() {
+  const el = document.getElementById('client-groups-list');
+  if (!clientGroupNames.length) {
+    el.innerHTML = '<div class="card-sub" style="margin-bottom:8px">Ingen grupper endnu.</div>';
+    return;
+  }
+  el.innerHTML = clientGroupNames.map(name => {
+    const members = clientGroupsClients.filter(c => c.groups.includes(name));
+    const expanded = expandedClientGroup === name;
+    const chips = clientGroupsClients.map(c => {
+      const active = c.groups.includes(name);
+      return `<span class="ss-tag${active ? ' active' : ''}" style="cursor:pointer" onclick="toggleGroupMember(${JSON.stringify(c.id)}, ${JSON.stringify(name)})">${escapeHtml(c.name)}</span>`;
+    }).join('');
+    return `<div class="card" style="margin-bottom:8px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleGroupExpand(${JSON.stringify(name)})">
+        <div>
+          <div style="font-weight:700">${escapeHtml(name)}</div>
+          <div class="card-sub" style="margin:2px 0 0">${members.length} klient${members.length === 1 ? '' : 'er'}</div>
+        </div>
+        <span style="cursor:pointer" onclick="event.stopPropagation(); removeClientGroup(${JSON.stringify(name)})">✕</span>
+      </div>
+      ${expanded ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">${chips}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function toggleGroupExpand(name) {
+  expandedClientGroup = expandedClientGroup === name ? null : name;
+  renderClientGroups();
+}
+
+async function addClientGroup() {
+  const input = document.getElementById('new-client-group-name');
+  const val = input.value.trim();
+  if (!val || clientGroupNames.includes(val)) return;
+  input.value = '';
+  clientGroupNames = [...clientGroupNames, val];
+  renderClientGroups();
+  clientGroupsSessionCache = null; // næste booking-form henter frisk (se ensureClientGroupsLoaded)
+  const { error } = await sb.from('coach_status').update({ client_groups: clientGroupNames }).eq('id', 1);
+  if (error) showToast('⚠ Kunne ikke gemme gruppen: ' + error.message);
+}
+
+// Sletter selve gruppenavnet OG rydder det op af enhver klients egen
+// groups-liste, der stadig peger på det.
+async function removeClientGroup(name) {
+  clientGroupNames = clientGroupNames.filter(g => g !== name);
+  if (expandedClientGroup === name) expandedClientGroup = null;
+  const affected = clientGroupsClients.filter(c => c.groups.includes(name));
+  clientGroupsClients = clientGroupsClients.map(c => c.groups.includes(name) ? { ...c, groups: c.groups.filter(g => g !== name) } : c);
+  renderClientGroups();
+  clientGroupsSessionCache = null;
+  const { error } = await sb.from('coach_status').update({ client_groups: clientGroupNames }).eq('id', 1);
+  if (error) showToast('⚠ Kunne ikke slette gruppen: ' + error.message);
+  await Promise.all(affected.map(c => sb.from('clients').update({ groups: c.groups.filter(g => g !== name) }).eq('id', c.id)));
+}
+
+async function toggleGroupMember(clientId, name) {
+  const client = clientGroupsClients.find(c => c.id === clientId);
+  if (!client) return;
+  const isMember = client.groups.includes(name);
+  const nextGroups = isMember ? client.groups.filter(g => g !== name) : [...client.groups, name];
+  clientGroupsClients = clientGroupsClients.map(c => c.id === clientId ? { ...c, groups: nextGroups } : c);
+  renderClientGroups();
+  clientGroupsSessionCache = null;
+  const { error } = await sb.from('clients').update({ groups: nextGroups }).eq('id', clientId);
+  if (error) {
+    showToast('⚠ Kunne ikke gemme: ' + error.message);
+    clientGroupsClients = clientGroupsClients.map(c => c.id === clientId ? { ...c, groups: client.groups } : c);
+    renderClientGroups();
+  }
+}
+
+// ══════════════════════════════════════
+// GRUPPEBESKED (2026-09-02) — Rune: "Jeg vil gerne kunne sende beskeder
+// til 'alle'... dem i afslutning ikke med i alle, med mindre jeg
+// tilvælger dette." Sender N almindelige enkelt-beskeder via samme
+// DATA.checkins/coachDirtyCheckinIds-kø som sendCoachMessage() allerede
+// bruger for én besked — genbruger den eksisterende periodiske
+// synkronisering uændret, ingen ny insert-vej.
+// ══════════════════════════════════════
+let groupMessageSelected = new Set();
+
+function openGroupMessageComposer() {
+  // "Alle" udgangspunkt: alle klienter UDEN aktiv afslutningsfrist.
+  groupMessageSelected = new Set(DATA.clients.filter(c => !c.dataRetentionUntil).map(c => c.id));
+  document.getElementById('group-message-text').value = '';
+  document.getElementById('group-message-error').style.display = 'none';
+  if (!clientGroupsSessionCache) ensureClientGroupsLoaded(renderGroupMessageComposer);
+  renderGroupMessageComposer();
+  document.getElementById('modal-group-message').classList.add('open');
+}
+
+function renderGroupMessageComposer() {
+  document.getElementById('group-message-count').textContent = `${groupMessageSelected.size} valgt`;
+  const groupNames = clientGroupsSessionCache ? clientGroupsSessionCache.names : [];
+  document.getElementById('group-message-groups').innerHTML = groupNames.length
+    ? groupNames.map(g => {
+        const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(g));
+        const allIn = members.length > 0 && members.every(c => groupMessageSelected.has(c.id));
+        return `<span class="ss-tag${allIn ? ' active' : ''}" style="cursor:pointer" onclick="toggleGroupMessageGroup(${JSON.stringify(g)})">👥 ${escapeHtml(g)}</span>`;
+      }).join('')
+    : '';
+  document.getElementById('group-message-clients').innerHTML = DATA.clients.map(c => {
+    const active = groupMessageSelected.has(c.id);
+    return `<span class="ss-tag${active ? ' active' : ''}" style="cursor:pointer" onclick="toggleGroupMessageClient(${c.id})">${escapeHtml(c.name)}${c.dataRetentionUntil ? ' ⏳' : ''}</span>`;
+  }).join('');
+}
+
+function toggleGroupMessageClient(clientId) {
+  if (groupMessageSelected.has(clientId)) groupMessageSelected.delete(clientId);
+  else groupMessageSelected.add(clientId);
+  renderGroupMessageComposer();
+}
+
+function toggleGroupMessageGroup(name) {
+  if (!clientGroupsSessionCache) return;
+  const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(name));
+  const allIn = members.length > 0 && members.every(c => groupMessageSelected.has(c.id));
+  members.forEach(c => (allIn ? groupMessageSelected.delete(c.id) : groupMessageSelected.add(c.id)));
+  renderGroupMessageComposer();
+}
+
+async function sendGroupMessage() {
+  const text = document.getElementById('group-message-text').value.trim();
+  const errorEl = document.getElementById('group-message-error');
+  errorEl.style.display = 'none';
+  if (!text || !groupMessageSelected.size) return;
+  const targetIds = [...groupMessageSelected];
+  const withPending = targetIds.filter(id => getPendingCheckins(id).length > 0);
+  if (withPending.length > 0) {
+    const ok = confirm(`${withPending.length} af de valgte har ubesvarede check-ins. Denne besked besvarer dem IKKE automatisk.\n\nSend alligevel?`);
+    if (!ok) return;
+  }
+  const btn = document.getElementById('group-message-send-btn');
+  btn.disabled = true;
+  const today = todayLocalStr();
+  targetIds.forEach(clientId => {
+    const ci = {
+      id: genId(), clientId,
+      date: today,
+      energy: null, sleep: null, training: null,
+      comment: '',
+      reply: text,
+      autoReplied: false,
+      fromCoach: true,
+      hiddenForCoach: false,
+      hiddenForClient: false
+    };
+    DATA.checkins.push(ci);
+    coachDirtyCheckinIds.add(ci.id);
+  });
+  save();
+  btn.disabled = false;
+  closeModal('modal-group-message');
+  showToast(`Besked sendt til ${targetIds.length}`);
+  renderAllCheckins();
 }
 
 // ══════════════════════════════════════
