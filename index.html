@@ -4708,6 +4708,16 @@ function toggleSlotSelection(slotId) {
   renderCoachBookingSlots();
 }
 
+// Vælg/fravælg alle tider i én Dedikeret/Reserveret-gruppe med ét tryk, i
+// stedet for at klikke hvert checkboks enkeltvist. Toggle: hvis alle i
+// gruppen allerede er valgt, fravælges de i stedet (samme toggle-mønster som
+// den enkelte checkboks ovenfor).
+function selectAllSlotsInGroup(slotIds) {
+  const allSelected = slotIds.length > 0 && slotIds.every(id => slotEditSelection.has(id));
+  slotIds.forEach(id => allSelected ? slotEditSelection.delete(id) : slotEditSelection.add(id));
+  renderCoachBookingSlots();
+}
+
 function editSingleSlotVisibility(slotId) {
   slotEditSelection = new Set([slotId]);
   openSlotVisibilityModal();
@@ -4934,9 +4944,20 @@ function slotGroupHtml(key, label, color, items) {
   const shareBtn = shareFn
     ? `<button type="button" class="btn-icon" title="Del som tekst" style="margin-right:10px" onclick="event.stopPropagation();${shareFn}()">📤</button>`
     : '';
+  // Rune: "vil gerne kunne vælge feks alle 'dedikerede' aftaler med et
+  // enkelt tryk... så jeg ikke skal vælge alle aftaler enkeltvist" —
+  // samme par grupper (Dedikeret/Reserveret) som "Del"-knappen ovenfor,
+  // ikke Optaget (allerede bookede tider, ikke kandidater til
+  // bulk-synligheds-redigering). Genbruger den eksisterende
+  // slotEditSelection — markerer/afmarkerer bare ALLE denne gruppes
+  // id'er på én gang, samme "Rediger synlighed for X valgte"-knap
+  // nedenfor virker uændret bagefter.
+  const selectAllBtn = (key === 'reserveret' || key === 'dedikeret')
+    ? `<button type="button" class="btn-icon" title="Vælg/fravælg alle i denne gruppe" style="margin-right:10px" onclick="event.stopPropagation();selectAllSlotsInGroup(${JSON.stringify(items.map(s => s.id))})">☑️</button>`
+    : '';
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin:16px 0 8px;user-select:none" onclick="toggleSlotGroup('${key}')">
     <div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.08em">${label} (${items.length})</div>
-    <div style="display:flex;align-items:center">${shareBtn}<span style="color:var(--gray);font-size:13px">${collapsed ? '▸' : '▾'}</span></div>
+    <div style="display:flex;align-items:center">${selectAllBtn}${shareBtn}<span style="color:var(--gray);font-size:13px">${collapsed ? '▸' : '▾'}</span></div>
   </div>`;
   if (collapsed) return html;
 
@@ -7907,8 +7928,14 @@ async function toggleGroupMember(clientId, name) {
 let groupMessageSelected = new Set();
 
 async function openGroupMessageComposer() {
-  // "Alle" udgangspunkt: alle klienter UDEN aktiv afslutningsfrist.
-  groupMessageSelected = new Set(DATA.clients.filter(c => !c.dataRetentionUntil).map(c => c.id));
+  // RETTET (2026-09-02): Startede tidligere med ALLE klienter (minus
+  // afslutning) forvalgt — Rune rapporterede at klienter der ALDRIG var
+  // tilføjet nogen gruppe (fx Rune/J-P som klientnavne) alligevel så
+  // "valgte" ud i listen, fordi "Alle"-udgangspunktet gjorde næsten alle
+  // allerede markerede FØR hun rørte en gruppeknap — umuligt at se hvem en
+  // gruppeknap reelt tilføjede. Start i stedet tomt; "Alle" er nu sin egen
+  // eksplicitte knap ved siden af gruppeknapperne (se renderGroupMessageComposer).
+  groupMessageSelected = new Set();
   document.getElementById('group-message-text').value = '';
   document.getElementById('group-message-error').style.display = 'none';
   // Rune: "dem jeg har valgt i gruppen ikke de samme jeg ser under
@@ -7928,14 +7955,22 @@ async function openGroupMessageComposer() {
 function renderGroupMessageComposer() {
   document.getElementById('group-message-count').textContent = `${groupMessageSelected.size} valgt`;
   const groupNames = clientGroupsSessionCache ? clientGroupsSessionCache.names : [];
-  document.getElementById('group-message-groups').innerHTML = groupNames.length
-    ? `<div class="card-sub" style="margin-bottom:8px">👥 Vælg en gruppe med ét tryk</div>
-       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px">${groupNames.map(g => {
-        const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(g));
-        const allIn = members.length > 0 && members.every(c => groupMessageSelected.has(c.id));
-        return `<button type="button" class="btn btn-sm${allIn ? ' btn-primary' : ''}" onclick="toggleGroupMessageGroup(${JSON.stringify(g)})">${escapeHtml(g)}</button>`;
-      }).join('')}</div>`
-    : '<div class="card-sub" style="margin-bottom:4px">Ingen grupper oprettet endnu — se ⚙ Indstillinger → Administrer grupper.</div>';
+  // "Alle" er nu sin egen eksplicitte knap (ikke længere et forvalgt
+  // udgangspunkt) — se begrundelse i openGroupMessageComposer(). Udelukker
+  // stadig afslutningsklienter som udgangspunkt, jf. Runes oprindelige ønske;
+  // hun kan altid tilføje dem bagefter med enkelt-tryk på deres eget navn.
+  const allTargets = DATA.clients.filter(c => !c.dataRetentionUntil);
+  const allIn = allTargets.length > 0 && allTargets.every(c => groupMessageSelected.has(c.id));
+  const allBtn = `<button type="button" class="btn btn-sm${allIn ? ' btn-primary' : ''}" onclick="toggleGroupMessageAll()">Alle</button>`;
+  const groupBtns = groupNames.map(g => {
+    const members = DATA.clients.filter(c => (clientGroupsSessionCache.byClient[c.id] || []).includes(g));
+    const active = members.length > 0 && members.every(c => groupMessageSelected.has(c.id));
+    return `<button type="button" class="btn btn-sm${active ? ' btn-primary' : ''}" onclick="toggleGroupMessageGroup(${JSON.stringify(g)})">${escapeHtml(g)}</button>`;
+  }).join('');
+  document.getElementById('group-message-groups').innerHTML =
+    `<div class="card-sub" style="margin-bottom:8px">👥 Vælg med ét tryk</div>
+     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px">${allBtn}${groupBtns}</div>` +
+    (groupNames.length ? '' : '<div class="card-sub" style="margin-top:4px">Ingen grupper oprettet endnu — se ⚙ Indstillinger → Administrer grupper.</div>');
   document.getElementById('group-message-clients').innerHTML = DATA.clients.map(c => {
     const active = groupMessageSelected.has(c.id);
     return `<span class="ss-tag${active ? ' active' : ''}" style="cursor:pointer" onclick="toggleGroupMessageClient(${c.id})">${escapeHtml(c.name)}${c.dataRetentionUntil ? ' ⏳' : ''}</span>`;
@@ -7945,6 +7980,13 @@ function renderGroupMessageComposer() {
 function toggleGroupMessageClient(clientId) {
   if (groupMessageSelected.has(clientId)) groupMessageSelected.delete(clientId);
   else groupMessageSelected.add(clientId);
+  renderGroupMessageComposer();
+}
+
+function toggleGroupMessageAll() {
+  const targets = DATA.clients.filter(c => !c.dataRetentionUntil);
+  const allIn = targets.length > 0 && targets.every(c => groupMessageSelected.has(c.id));
+  targets.forEach(c => (allIn ? groupMessageSelected.delete(c.id) : groupMessageSelected.add(c.id)));
   renderGroupMessageComposer();
 }
 
