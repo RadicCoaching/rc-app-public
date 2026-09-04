@@ -7026,8 +7026,6 @@ function handleBlockDragStart(event, i) {
 function handleBlockDropOnRow(event, targetIndex) {
   event.preventDefault();
   event.stopPropagation();
-  const libId = event.dataTransfer.getData('application/x-library-id');
-  if (libId) { insertExerciseBlockAt(Number(libId), targetIndex); draggedBlockIndex = null; return; }
   if (draggedBlockIndex === null || draggedBlockIndex === targetIndex) { draggedBlockIndex = null; return; }
   const moved = editingProgramBlocks[draggedBlockIndex];
   editingProgramBlocks.splice(draggedBlockIndex, 1);
@@ -7040,8 +7038,6 @@ function handleBlockDropOnRow(event, targetIndex) {
 
 function handleContainerDrop(event) {
   event.preventDefault();
-  const libId = event.dataTransfer.getData('application/x-library-id');
-  if (libId) { addExerciseBlockFromLibrary(Number(libId)); draggedBlockIndex = null; return; }
   if (draggedBlockIndex !== null) {
     const moved = editingProgramBlocks[draggedBlockIndex];
     editingProgramBlocks.splice(draggedBlockIndex, 1);
@@ -7106,7 +7102,6 @@ function renderExercisePickerList() {
   }
   el.innerHTML = lib.map(ex => `
     <div class="picker-item">
-      <span class="drag-handle" draggable="true" ondragstart="event.dataTransfer.setData('application/x-library-id', '${ex.id}'); event.dataTransfer.effectAllowed='copy'">⠿</span>
       ${ex.image ? `<img id="picker-thumb-${ex.id}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0">` : `<div style="width:36px;height:36px;border-radius:6px;background:var(--dark);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:15px">🏋️</div>`}
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:600">${escapeHtml(ex.name)}</div>
@@ -7120,13 +7115,27 @@ function renderExercisePickerList() {
   });
 }
 
+// RETTET (2026-09-04, "rod i rækkefølgen"-gentagelse): en øvelse kunne
+// tidligere trækkes direkte fra biblioteket (⠿-håndtaget på hver
+// biblioteks-række) og slippes OVEN PÅ en bestemt række i programmet —
+// indsat FØR den række (insertExerciseBlockAt(), fjernet). Web'ens
+// saveProgram() skriver sort_order som den rene array-INDEX på
+// gemme-tidspunktet (ingen server-side sikkerhed) — en unøjagtig
+// slip (fx oven på øverste række i stedet for i det tomme felt
+// nederst) blev derfor stille bagt ind i databasen som "ny øvelse
+// øverst", uden nogen advarsel. Bekræftet direkte i databasen: præcis
+// dette mønster ramte FIRE programmer (Upper A + Lower for Rune selv,
+// samt Nikitas og Christina Rammekjærs programmer), alle rettet samme
+// dag. "+ Tilføj"-knappen (addExerciseBlockFromLibrary, herunder) har
+// ALTID lagt nye øvelser sikkert sidst — den er nu den ENESTE måde at
+// tilføje en NY øvelse fra biblioteket på. Vil man have den et andet
+// sted end sidst, tilføjes den først, og trækkes derefter i den
+// eksisterende, sikre "flyt allerede-tilføjet øvelse"-funktion
+// (handleBlockDragStart/handleBlockDropOnRow ovenfor, uændret) — den
+// er ikke ramt af samme fejl, fordi den flytter et KENDT, allerede
+// eksisterende element, ikke indsætter et nyt et et gættet sted.
 function addExerciseBlockFromLibrary(libraryId) {
   editingProgramBlocks.push({ id: genId(), type: 'exercise', libraryId, setsReps: '', ss: '' });
-  renderProgramBlockEditor();
-}
-
-function insertExerciseBlockAt(libraryId, index) {
-  editingProgramBlocks.splice(index, 0, { id: genId(), type: 'exercise', libraryId, setsReps: '', ss: '' });
   renderProgramBlockEditor();
 }
 
