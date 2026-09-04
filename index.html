@@ -614,7 +614,7 @@ body::before{
       </div>
       <div style="display:flex;gap:10px;margin:-8px 0 16px">
         <button class="btn" id="client-scan-tanita-btn" style="flex:1;justify-content:center;display:none" onclick="openScanTanitaModal(currentUser)">📷 Scan kropsanalyse</button>
-        <button class="btn" style="flex:1;justify-content:center" onclick="openVideoMessageModal(currentUser, false)">🎥 Videobesked</button>
+        <button class="btn" style="flex:1;justify-content:center" onclick="openVideoMessageModal(currentUser, false)">🎥 Video/billede</button>
       </div>
       <button class="btn btn-block" style="margin:-8px 0 4px;font-size:13px" onclick="registerBiometric('client', currentUser)">🔓 Aktivér Face ID/fingeraftryk-login på denne enhed</button>
       <button class="btn btn-block" style="margin-bottom:4px;font-size:13px" onclick="enablePushNotifications()">🔔 Aktivér notifikationer på denne enhed</button>
@@ -1521,13 +1521,13 @@ body::before{
      se openVideoMessageModal(). -->
 <div class="modal-overlay" id="modal-video-message">
   <div class="modal">
-    <div class="modal-title">Videobesked 🎥</div>
-    <div class="field"><label>Video (max ca. 60 sekunder)</label>
-      <input type="file" accept="video/*" capture="user" id="vm-file-input" onchange="handleVideoMessageFile(this)">
+    <div class="modal-title">Video-/billedbesked 🎥</div>
+    <div class="field"><label>Video (max ca. 60 sekunder) eller billede</label>
+      <input type="file" accept="video/*,image/*" capture="user" id="vm-file-input" onchange="handleVideoMessageFile(this)">
       <div id="vm-preview" style="margin-top:8px"></div>
     </div>
     <div class="field"><label>Besked (valgfrit)</label>
-      <textarea id="vm-caption" placeholder="Skriv evt. en kort besked til videoen..."></textarea>
+      <textarea id="vm-caption" placeholder="Skriv evt. en kort besked..."></textarea>
     </div>
     <div id="vm-error" class="card-sub" style="color:var(--danger);margin-top:8px"></div>
     <div class="modal-actions">
@@ -3398,13 +3398,13 @@ function isSnoozed(until) {
 async function refreshInboxVideoItems() {
   if (!sb) return;
   const { data, error } = await sb.from('video_messages')
-    .select('id, client_id, created_at, caption, snoozed_until')
+    .select('id, client_id, created_at, caption, snoozed_until, media_type')
     .eq('hidden_for_coach', false)
     .eq('from_coach', false)
     .is('viewed_at', null);
   if (!error) {
     inboxVideoItems = (data || []).map(v => ({
-      id: v.id, clientId: v.client_id, createdAt: v.created_at, caption: v.caption || '', snoozedUntil: v.snoozed_until || null
+      id: v.id, clientId: v.client_id, createdAt: v.created_at, caption: v.caption || '', snoozedUntil: v.snoozed_until || null, mediaType: v.media_type || 'video'
     }));
   }
 }
@@ -3422,11 +3422,12 @@ function buildInboxItems() {
   });
   inboxVideoItems.filter(v => !isSnoozed(v.snoozedUntil)).forEach(v => {
     const client = DATA.clients.find(c => c.id === v.clientId);
+    const isPhoto = v.mediaType === 'photo';
     items.push({
       key: 'video-' + v.id, kind: 'video', id: v.id, clientId: v.clientId,
-      clientName: client ? client.name : '(ukendt klient)', sortAt: v.createdAt, icon: '🎥',
-      title: 'Videobesked — ' + (client ? client.name : '(ukendt klient)'),
-      preview: v.caption ? `"${v.caption}"` : 'Ny videobesked',
+      clientName: client ? client.name : '(ukendt klient)', sortAt: v.createdAt, icon: isPhoto ? '📷' : '🎥',
+      title: (isPhoto ? 'Billedbesked' : 'Videobesked') + ' — ' + (client ? client.name : '(ukendt klient)'),
+      preview: v.caption ? `"${v.caption}"` : (isPhoto ? 'Ny billedbesked' : 'Ny videobesked'),
     });
   });
   (DATA.trainingCheckins || []).filter(t => !t.coachSeen && !isSnoozed(t.snoozedUntil)).forEach(t => {
@@ -4034,7 +4035,7 @@ function renderMessagesThread(clientId, el) {
         <textarea id="coach-msg-input-${clientId}" placeholder="Skriv en besked..."></textarea>
       </div>
       <button class="btn btn-primary btn-block" onclick="sendCoachMessage(${clientId})">Send besked</button>
-      <button class="btn btn-block" style="margin-top:8px" onclick="openVideoMessageModal(${clientId}, true)">🎥 Send videobesked</button>
+      <button class="btn btn-block" style="margin-top:8px" onclick="openVideoMessageModal(${clientId}, true)">🎥 Send video/billede</button>
       <div id="thread-video-messages" style="margin-top:12px"></div>
     </div>`;
   if (!cis.length) {
@@ -10946,8 +10947,9 @@ function handleVideoMessageFile(inputEl) {
   if (!file) return;
   vmFile = file;
   const url = URL.createObjectURL(file);
-  document.getElementById('vm-preview').innerHTML =
-    `<video src="${url}" controls style="width:100%;max-height:260px;border-radius:var(--radius-sm);border:1px solid var(--border)"></video>`;
+  document.getElementById('vm-preview').innerHTML = file.type.startsWith('image/')
+    ? `<img src="${url}" style="width:100%;max-height:260px;object-fit:contain;border-radius:var(--radius-sm);border:1px solid var(--border)">`
+    : `<video src="${url}" controls style="width:100%;max-height:260px;border-radius:var(--radius-sm);border:1px solid var(--border)"></video>`;
   document.getElementById('vm-send-btn').disabled = false;
 }
 
@@ -10964,14 +10966,15 @@ async function sendVideoMessageWeb() {
     // databasen) — går derfor via video-message-urls-Edge Function'en
     // (service-role) for en signeret upload-URL/token i stedet, samme
     // rettelse som i rc-mobile samme tur.
+    const mediaType = vmFile.type.startsWith('image/') ? 'photo' : 'video';
     const { data: urlData, error: urlError } = await sb.functions.invoke('video-message-urls', {
-      body: { action: 'upload', client_id: vmTargetClientId },
+      body: { action: 'upload', client_id: vmTargetClientId, media_type: mediaType },
     });
     if (urlError) throw new Error(await extractFunctionErrorMessage(urlError));
     if (urlData && urlData.error) throw new Error(urlData.error);
     const { path, token } = urlData;
     const { error: uploadError } = await sb.storage.from('video-messages').uploadToSignedUrl(path, token, vmFile, {
-      contentType: vmFile.type || 'video/mp4',
+      contentType: vmFile.type || (mediaType === 'photo' ? 'image/jpeg' : 'video/mp4'),
     });
     if (uploadError) throw uploadError;
     const caption = document.getElementById('vm-caption').value.trim();
@@ -10980,12 +10983,13 @@ async function sendVideoMessageWeb() {
       client_id: vmTargetClientId,
       from_coach: vmFromCoach,
       video_path: path,
+      media_type: mediaType,
       duration_seconds: null,
       caption: caption || null,
     });
     if (insertError) throw insertError;
     closeModal('modal-video-message');
-    showToast('Video sendt ✅');
+    showToast(mediaType === 'photo' ? 'Billede sendt ✅' : 'Video sendt ✅');
     if (vmFromCoach) {
       if (currentMessagesClientId === vmTargetClientId) renderThreadVideoMessages(vmTargetClientId);
     } else {
@@ -11004,7 +11008,7 @@ async function sendVideoMessageWeb() {
 async function loadVideoMessages(clientId, viewer) {
   if (!sb) return [];
   let query = sb.from('video_messages')
-    .select('id, client_id, from_coach, video_path, duration_seconds, caption, created_at, viewed_at, video_deleted')
+    .select('id, client_id, from_coach, video_path, duration_seconds, caption, created_at, viewed_at, video_deleted, media_type')
     .eq('client_id', clientId)
     .order('created_at', { ascending: false });
   query = viewer === 'coach' ? query.eq('hidden_for_coach', false) : query.eq('hidden_for_client', false);
@@ -11026,8 +11030,8 @@ function videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn) {
     </div>
     <div id="vm-slot-${v.id}" style="margin-top:6px">
       ${v.video_deleted
-        ? '<div class="card-sub" style="font-style:italic">🎥 Video udløbet — set for over 15 min siden</div>'
-        : `<button class="btn btn-block" onclick="revealVideoMessage(${v.id}, '${v.video_path}', ${isRecipientFn(v) ? 'true' : 'false'})">▶ Tryk for at se video</button>`}
+        ? `<div class="card-sub" style="font-style:italic">${v.media_type === 'photo' ? '📷 Billede udløbet' : '🎥 Video udløbet'} — set for over 15 min siden</div>`
+        : `<button class="btn btn-block" onclick="revealVideoMessage(${v.id}, '${v.video_path}', ${isRecipientFn(v) ? 'true' : 'false'}, '${v.media_type}')">▶ Tryk for at se ${v.media_type === 'photo' ? 'billede' : 'video'}</button>`}
     </div>
     ${v.caption ? `<div class="checkin-comment" style="margin-top:8px">"${escapeHtml(v.caption)}"</div>` : ''}
   </div>`;
@@ -11038,14 +11042,17 @@ async function videoMessagesHtml(rows, senderLabelFn, hideFnName, isRecipientFn)
   return rows.map(v => videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn)).join('');
 }
 
-async function revealVideoMessage(id, videoPath, isRecipient) {
+async function revealVideoMessage(id, videoPath, isRecipient, mediaType) {
   const slot = document.getElementById('vm-slot-' + id);
   if (!slot) return;
-  slot.innerHTML = '<div class="card-sub">Henter video…</div>';
+  const isPhoto = mediaType === 'photo';
+  slot.innerHTML = `<div class="card-sub">Henter ${isPhoto ? 'billede' : 'video'}…</div>`;
   if (isRecipient) markVideoMessageViewedWeb(id);
   const { data, error } = await sb.functions.invoke('video-message-urls', { body: { action: 'view', path: videoPath } });
-  if (error || !data || data.error || !data.signedUrl) { slot.innerHTML = '<div class="card-sub">Kunne ikke indlæse video</div>'; return; }
-  slot.innerHTML = `<video src="${data.signedUrl}" controls autoplay style="width:100%;max-height:260px;border-radius:var(--radius-sm)"></video>`;
+  if (error || !data || data.error || !data.signedUrl) { slot.innerHTML = `<div class="card-sub">Kunne ikke indlæse ${isPhoto ? 'billede' : 'video'}</div>`; return; }
+  slot.innerHTML = isPhoto
+    ? `<img src="${data.signedUrl}" style="width:100%;max-height:260px;object-fit:contain;border-radius:var(--radius-sm)">`
+    : `<video src="${data.signedUrl}" controls autoplay style="width:100%;max-height:260px;border-radius:var(--radius-sm)"></video>`;
 }
 
 // .is('viewed_at', null) forhindrer at et gentaget klik nulstiller/forlænger
