@@ -1986,7 +1986,7 @@ async function pushToSupabase() {
       (c.programs || []).forEach((p, pi) => {
         allPrograms.push({ id: p.id, client_id: c.id, name: p.name, focus: p.focus || null, sort_order: pi });
         (p.blocks || []).forEach((b, bi) => {
-          allBlocks.push({ id: b.id, program_id: p.id, type: b.type, text: b.text || null, library_id: b.libraryId || null, sets_reps: b.setsReps || null, ss: b.ss || null, sort_order: bi, note: b.note || null });
+          allBlocks.push({ id: b.id, program_id: p.id, type: b.type, text: b.text || null, library_id: b.libraryId || null, sets_reps: b.setsReps || null, sets: b.sets != null ? b.sets : null, reps: b.reps != null ? b.reps : null, reps_range_text: b.repsRangeText || null, ss: b.ss || null, sort_order: bi, note: b.note || null });
         });
       });
     });
@@ -2068,7 +2068,7 @@ async function pushToSupabase() {
           if (!entries.length) return;
           const libraryId = parseInt(libId, 10);
           weightSyncJobs.push(
-            sbCheck(sb.from('weight_logs').upsert(entries.map(e => ({ id: e.id, program_id: p.id, library_id: libraryId, date: e.date, weight: e.weight })))),
+            sbCheck(sb.from('weight_logs').upsert(entries.map(e => ({ id: e.id, program_id: p.id, library_id: libraryId, date: e.date, weight: e.weight, sets: e.sets != null ? e.sets : null, reps: e.reps != null ? e.reps : null })))),
           );
         });
       });
@@ -2378,7 +2378,7 @@ async function refreshFromSupabase() {
     const blocksByProgram = {};
     (blocksRes.data || []).sort((a, b) => a.sort_order - b.sort_order).forEach(b => {
       (blocksByProgram[b.program_id] = blocksByProgram[b.program_id] || []).push({
-        id: b.id, type: b.type, text: b.text || undefined, libraryId: b.library_id || undefined, setsReps: b.sets_reps || undefined, ss: b.ss || undefined, note: b.note || undefined
+        id: b.id, type: b.type, text: b.text || undefined, libraryId: b.library_id || undefined, setsReps: b.sets_reps || undefined, sets: b.sets != null ? b.sets : undefined, reps: b.reps != null ? b.reps : undefined, repsRangeText: b.reps_range_text || undefined, ss: b.ss || undefined, note: b.note || undefined
       });
     });
 
@@ -2400,7 +2400,7 @@ async function refreshFromSupabase() {
     (wlRes.data || []).forEach(w => {
       const key = String(w.library_id);
       const pMap = (weightLogsByProgram[w.program_id] = weightLogsByProgram[w.program_id] || {});
-      (pMap[key] = pMap[key] || []).push({ id: w.id, date: w.date, weight: w.weight });
+      (pMap[key] = pMap[key] || []).push({ id: w.id, date: w.date, weight: w.weight, sets: w.sets != null ? w.sets : undefined, reps: w.reps != null ? w.reps : undefined });
     });
     Object.keys(weightLogsByProgram).forEach(progId => {
       Object.keys(weightLogsByProgram[progId]).forEach(key => {
@@ -5455,7 +5455,8 @@ function formatProgramAsText(program) {
     }
     const ex = (DATA.exerciseLibrary || []).find(e => e.id === b.libraryId);
     const name = ex ? ex.name : '(slettet øvelse)';
-    out += `- ${name}${b.ss ? '  [' + b.ss + ']' : ''}${b.setsReps ? '  (' + b.setsReps + ')' : ''}\n`;
+    const setsRepsDisplay = formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps);
+    out += `- ${name}${b.ss ? '  [' + b.ss + ']' : ''}${setsRepsDisplay ? '  (' + setsRepsDisplay + ')' : ''}\n`;
     if (b.note && b.note.trim()) out += `  Note: ${b.note.trim()}\n`;
     if (ex && ex.description) out += `  ${ex.description}\n`;
   });
@@ -5556,7 +5557,8 @@ function pdfWriteProgramBlocks(doc, program, margin, pageW, pageH, startY) {
     doc.setFontSize(11.5);
     doc.setFont(undefined, 'bold');
     doc.setTextColor(0);
-    doc.text(`•  ${name}${b.ss ? '  [' + b.ss + ']' : ''}${b.setsReps ? '  —  ' + b.setsReps : ''}`, margin, y);
+    const pdfSetsRepsDisplay = formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps);
+    doc.text(`•  ${name}${b.ss ? '  [' + b.ss + ']' : ''}${pdfSetsRepsDisplay ? '  —  ' + pdfSetsRepsDisplay : ''}`, margin, y);
     y += 15;
     doc.setFont(undefined, 'normal');
     doc.setFontSize(10);
@@ -6764,7 +6766,7 @@ function renderDetailProgram(clientId) {
         return `<div class="exercise-row-tap" style="cursor:default">
           <div style="min-width:0;flex:1;cursor:pointer" onclick="openExerciseDetail(${p.id}, ${b.libraryId}, ${clientId})">
             <div class="exercise-row-name">${escapeHtml(name)}${b.ss ? `<span class="ss-tag">${escapeHtml(b.ss)}</span>` : ''}</div>
-            ${b.setsReps ? `<div class="exercise-row-sets">${escapeHtml(b.setsReps)}</div>` : ''}
+            ${formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps) ? `<div class="exercise-row-sets">${escapeHtml(formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps))}</div>` : ''}
           </div>
           ${moveBtns}
           <button class="note-icon-btn ${hasNote ? 'has-note' : ''}" title="${hasNote ? 'Se/redigér note' : 'Tilføj note'}" onclick="event.stopPropagation(); openExerciseNoteModal(${clientId}, ${p.id}, ${b.id})">
@@ -6859,7 +6861,7 @@ function renderWarmupCard(clientId, isCoachView) {
     return `<div class="exercise-row-tap" style="cursor:default">
       <div style="min-width:0;flex:1">
         <div class="exercise-row-name">${escapeHtml(name)}${b.ss ? `<span class="ss-tag">${escapeHtml(b.ss)}</span>` : ''}</div>
-        ${b.setsReps ? `<div class="exercise-row-sets">${escapeHtml(b.setsReps)}</div>` : ''}
+        ${formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps) ? `<div class="exercise-row-sets">${escapeHtml(formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps))}</div>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -6999,8 +7001,17 @@ function renderProgramBlockEditor() {
           <div style="font-weight:600;font-size:14px">${escapeHtml(name)}</div>
           ${ex ? `<button class="btn-icon" title="Redigér øvelse" onclick="openLibraryEditor(${ex.id})">✎</button>` : ''}
         </div>
-        <div style="display:flex;gap:6px;margin-top:4px">
-          <input type="text" value="${escapeHtml(b.setsReps || '')}" placeholder="fx 3×10-12" oninput="editingProgramBlocks[${i}].setsReps=this.value" style="flex:1;min-width:0;background:var(--dark);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--white);font-size:13px;outline:none">
+        <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;align-items:center">
+          <select class="ss-select" title="Sæt" onchange="editingProgramBlocks[${i}].sets=this.value?parseInt(this.value,10):null; renderProgramBlockEditor()" style="width:auto;max-width:58px;flex:0 0 auto;color:${b.sets != null ? 'var(--white)' : 'var(--gray)'}">
+            <option value="">Sæt</option>
+            ${[0,1,2,3,4,5,6,7,8].map(n => `<option value="${n}" ${b.sets === n ? 'selected' : ''}>${n}</option>`).join('')}
+          </select>
+          <span style="color:var(--gray);font-size:12px;flex:0 0 auto">×</span>
+          <select class="ss-select" title="Reps" onchange="editingProgramBlocks[${i}].reps=this.value?parseInt(this.value,10):null; renderProgramBlockEditor()" style="width:auto;max-width:58px;flex:0 0 auto;color:${b.reps != null ? 'var(--white)' : 'var(--gray)'}">
+            <option value="">Reps</option>
+            ${Array.from({ length: 21 }, (_, n) => n).map(n => `<option value="${n}" ${b.reps === n ? 'selected' : ''}>${n}</option>`).join('')}
+          </select>
+          <input type="text" value="${escapeHtml(b.repsRangeText != null ? b.repsRangeText : ((b.sets == null && b.reps == null) ? (b.setsReps || '') : ''))}" placeholder="interval, fx 10-12" title="Valgfrit vejledende reps-interval — påvirker ikke rekord-sammenligningen" oninput="editingProgramBlocks[${i}].repsRangeText=this.value" style="flex:1;min-width:70px;background:var(--dark);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--white);font-size:12px;outline:none">
           <select class="ss-select" title="Supersæt — kæd øvelsen sammen med den næste" onchange="editingProgramBlocks[${i}].ss=this.value; renderProgramBlockEditor()" style="width:auto;max-width:72px;flex:0 0 auto;color:${b.ss ? 'var(--accent-blue)' : 'var(--gray)'};font-weight:${b.ss ? '700' : '400'}">
             <option value="">SS —</option>
             ${['SS1','SS2','SS3','SS4','SS5','SS6'].map(v => `<option value="${v}" ${b.ss === v ? 'selected' : ''}>${v}</option>`).join('')}
@@ -8444,7 +8455,7 @@ function renderClientProgramDetail(program, el) {
       html += `<div class="exercise-row-tap" onclick="openExerciseDetail(${program.id}, ${b.libraryId})">
         <div style="min-width:0;flex:1">
           <div class="exercise-row-name">${escapeHtml(name)}${b.ss ? `<span class="ss-tag">${escapeHtml(b.ss)}</span>` : ''}</div>
-          ${b.setsReps ? `<div class="exercise-row-sets">${escapeHtml(b.setsReps)}</div>` : ''}
+          ${formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps) ? `<div class="exercise-row-sets">${escapeHtml(formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps))}</div>` : ''}
         </div>
         <div class="exercise-row-badge ${weight ? 'has-weight' : ''}">${weight ? formatWeightDisplay(weight) : 'Log vægt →'}</div>
       </div>`;
@@ -8526,6 +8537,18 @@ function formatWeightDisplay(w) {
   return isNumeric ? (w + ' kg') : String(w).toUpperCase();
 }
 
+// Strukturerede sæt/reps til præcis rekord-sammenligning (2026-09-04) — se
+// supabase/migrations/2026-09-04_add_structured_sets_reps.sql og rc-mobiles
+// src/lib/setsReps.ts (samme funktion, portet hertil). Sammensætter en
+// visningstekst fra de strukturerede felter når de findes ("3 × 12 (10-12)"),
+// falder tilbage til den gamle fri tekst for blokke der endnu ikke er migreret.
+function formatSetsReps(sets, reps, repsRangeText, legacySetsReps) {
+  if (sets != null && reps != null) {
+    return `${sets} × ${reps}${repsRangeText ? ` (${repsRangeText})` : ''}`;
+  }
+  return legacySetsReps || null;
+}
+
 // Husker/gendanner hvilken af de tre tilstande vægt-feltet stod i, ud fra seneste
 // måling — og for Kropsvægt hentes klientens senest registrerede vægt (Krop-fanen)
 // automatisk ind hver gang, i stedet for at skulle skrives manuelt.
@@ -8560,7 +8583,7 @@ function exSetWeightMode(mode) {
   }
 }
 
-function saveExerciseWeight(clientId, programId, key, value, date) {
+function saveExerciseWeight(clientId, programId, key, value, date, sets, reps) {
   const client = DATA.clients.find(c => c.id === clientId);
   const program = client.programs.find(p => p.id === programId);
   if (!program.weightLogs) program.weightLogs = {};
@@ -8571,7 +8594,10 @@ function saveExerciseWeight(clientId, programId, key, value, date) {
   // Hvert tryk på "Gem vægt" opretter en NY registrering — også hvis der i
   // forvejen er en måling samme dato (fx to træningspas samme dag). Ingen
   // overskriver hinanden; alle gemmes med hver sit unikke id.
-  program.weightLogs[key].push({ id: genId(), date: targetDate, weight: normalized });
+  // sets/reps (2026-09-04): SNAPSHOT af blokkens strukturerede sæt/reps på
+  // lognings-tidspunktet — se saveExerciseDetailWeight() — så historikken
+  // forbliver korrekt selv hvis programmet senere ændres.
+  program.weightLogs[key].push({ id: genId(), date: targetDate, weight: normalized, sets: sets != null ? sets : null, reps: reps != null ? reps : null });
   program.weightLogs[key].sort((a, b) => a.date.localeCompare(b.date));
   return save();
 }
@@ -8639,13 +8665,16 @@ let currentExerciseDetail = { programId: null, libraryId: null, clientId: null }
 
 function openExerciseDetail(programId, libraryId, clientId) {
   clientId = clientId != null ? clientId : currentUser;
-  currentExerciseDetail = { programId, libraryId, clientId };
   const client = DATA.clients.find(c => c.id === clientId);
   const program = client.programs.find(p => p.id === programId);
   const block = (program.blocks || []).find(b => b.type === 'exercise' && b.libraryId === libraryId);
+  // sets/reps (2026-09-04): huskes her så saveExerciseDetailWeight() kan
+  // snapshotte dem på den nye weight_log-række og bruge dem til den
+  // sæt/reps-differentierede rekord-sammenligning, uden at slå blokken op igen.
+  currentExerciseDetail = { programId, libraryId, clientId, sets: block ? block.sets : null, reps: block ? block.reps : null };
   const ex = (DATA.exerciseLibrary || []).find(e => e.id === libraryId);
   document.getElementById('ex-detail-name').textContent = ex ? ex.name : '(slettet øvelse)';
-  document.getElementById('ex-detail-setsreps').textContent = block ? (block.setsReps || '') : '';
+  document.getElementById('ex-detail-setsreps').textContent = block ? (formatSetsReps(block.sets, block.reps, block.repsRangeText, block.setsReps) || '') : '';
   const clientLabelEl = document.getElementById('ex-detail-client-label');
   if (clientLabelEl) clientLabelEl.textContent = (currentUser === 'coach') ? client.name : '';
   document.getElementById('ex-detail-description').textContent = ex && ex.description ? ex.description : 'Ingen beskrivelse endnu.';
@@ -8782,12 +8811,27 @@ async function saveExerciseDetailWeight() {
   // (renderExerciseWeightHistory) — så en ny rekord kunne aldrig udløses
   // for den slags øvelser. Rune: "ikke alle øvelser fejrer ny rekord —
   // ser ud til at være hele Upper B" (2026-09-01).
+  // sæt/reps-differentieret sammenligning (2026-09-04, se
+  // supabase/migrations/2026-09-04_add_structured_sets_reps.sql): en
+  // historisk logning tæller kun med hvis DENS sæt/reps matcher den NYE
+  // lognings sæt/reps PRÆCIST — men kun når begge sider rent faktisk har
+  // strukturerede sæt/reps sat. Mangler et af programmet i dag (fx en
+  // ikke-migreret blok), falder sammenligningen tilbage til den gamle
+  // adfærd (kun vægt-"art"), så intet mistes. Samme logik som rc-mobiles
+  // ExerciseDetailScreen.tsx.
   const priorHistory = allWeightLogsFor(currentExerciseDetail.clientId, currentExerciseDetail.libraryId);
   const newRecord = weightRecordValue(value);
-  const sameKindHistory = priorHistory.map(h => weightRecordValue(h.weight)).filter(v => v && newRecord && v.kind === newRecord.kind);
+  const currentSets = currentExerciseDetail.sets;
+  const currentReps = currentExerciseDetail.reps;
+  const currentHasStructuredScheme = currentSets != null && currentReps != null;
+  const sameKindHistory = priorHistory
+    .map(h => ({ record: weightRecordValue(h.weight), sets: h.sets, reps: h.reps }))
+    .filter(h => h.record && newRecord && h.record.kind === newRecord.kind)
+    .filter(h => !currentHasStructuredScheme || h.sets == null || h.reps == null || (h.sets === currentSets && h.reps === currentReps))
+    .map(h => h.record);
   const isNewPr = !!newRecord && sameKindHistory.length > 0 && sameKindHistory.every(v => newRecord.value > v.value);
 
-  const pending = saveExerciseWeight(currentExerciseDetail.clientId, currentExerciseDetail.programId, currentExerciseDetail.libraryId, value, date);
+  const pending = saveExerciseWeight(currentExerciseDetail.clientId, currentExerciseDetail.programId, currentExerciseDetail.libraryId, value, date, currentSets, currentReps);
   renderExerciseWeightHistory();
   document.getElementById('ex-detail-date-input').value = todayLocalStr();
   // Genopfrisk feltet i samme tilstand (Kropsvægt henter evt. opdateret tal på ny)
