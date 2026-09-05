@@ -5647,7 +5647,7 @@ function csvEscape(val) {
   return s;
 }
 
-function exportAllClientData(clientId) {
+async function exportAllClientData(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client) return;
 
@@ -5693,12 +5693,13 @@ function exportAllClientData(clientId) {
     });
   });
 
-  // Noter — uden dato, da de er stående observationer/mål, ikke tidsstemplede
-  // hændelser. Taget med så mønstre (fx tilbagevendende smerter) kan ses ved
-  // siden af resten af historikken, ikke kun i selve appen.
-  if (client.notes && client.notes.trim()) {
-    addRow('', 'Klientnote', '', '', '', '', '', '', '', client.notes.trim());
-  }
+  // Noter (2026-09-04: ombygget til en dateret liste, client_notes-tabellen)
+  // — hver note har nu sin egen rigtige dato, så mønstre (fx tilbagevendende
+  // smerter) kan ses i sammenhæng med resten af historikken.
+  const { data: clientNotesData } = await sb.from('client_notes').select('date, text').eq('client_id', clientId);
+  (clientNotesData || []).forEach(n => {
+    addRow(n.date, 'Klientnote', '', '', '', '', '', '', '', n.text);
+  });
   (client.programs || []).forEach(p => {
     (p.blocks || []).forEach(b => {
       if (b.type === 'exercise' && b.note && b.note.trim()) {
@@ -7284,19 +7285,61 @@ function deleteProgram(clientId, programId) {
   showToast('Program slettet');
 }
 
-function renderDetailNotes(clientId) {
-  const client = DATA.clients.find(c => c.id === clientId);
-  document.getElementById('detail-notes').innerHTML = `
-    <div style="font-size:12px;color:var(--gray);margin-bottom:12px">⚠ Kun synlig for dig — klienten kan ikke se dette</div>
-    <textarea class="note-area" id="notes-edit-${clientId}">${client.notes || ''}</textarea>
-    <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="saveNotes(${clientId})">Gem noter</button>`;
+// Noter (2026-09-04, ombygget fra ét fritekstfelt til en dateret liste —
+// Rune: "kan jeg så ikke få det lavet sådan, at noterne gemmes for hver
+// gang i en liste, så jeg kan se tilbage over flere noter?" + en
+// sletnings-funktion pr. note). Genbruger client_notes-tabellen, som reelt
+// allerede fandtes i databasen (bygget i en tidligere session, men aldrig
+// koblet til nogen UI her eller i rc-mobile — se CHANGELOG.md). Direkte
+// Supabase-kald ligesom video-beskederne, uden om den generelle
+// DATA/save()-synkronisering — samme mønster, samme begrundelse (kun
+// coachen ejer denne liste, intet klient-flow at holde i sync med).
+async function renderDetailNotes(clientId) {
+  const el = document.getElementById('detail-notes');
+  el.innerHTML = `<div class="card-sub" style="margin-bottom:12px">⚠ Kun synlig for dig — klienten kan ikke se dette</div><div class="card-sub">Henter noter…</div>`;
+  const { data, error } = await sb.from('client_notes')
+    .select('id, date, text')
+    .eq('client_id', clientId)
+    .order('date', { ascending: false })
+    .order('id', { ascending: false });
+  if (error) { el.innerHTML = `<div class="card-sub">Kunne ikke hente noter: ${escapeHtml(error.message)}</div>`; return; }
+  renderClientNotesList(clientId, data || []);
 }
 
-function saveNotes(clientId) {
-  const client = DATA.clients.find(c => c.id === clientId);
-  client.notes = document.getElementById('notes-edit-' + clientId).value;
-  save();
-  showToast('Gemt');
+function renderClientNotesList(clientId, notes) {
+  const el = document.getElementById('detail-notes');
+  const listHtml = notes.length
+    ? notes.map(n => `
+      <div class="checkin-card" style="margin-bottom:8px">
+        <div class="checkin-header">
+          <div class="checkin-time">${fmtDate(n.date)}</div>
+          <button class="btn-icon" title="Slet note" onclick="deleteClientNote(${clientId}, ${n.id})">✕</button>
+        </div>
+        <div style="margin-top:6px;white-space:pre-line">${escapeHtml(n.text)}</div>
+      </div>`).join('')
+    : '<div class="card-sub" style="font-style:italic;margin-bottom:8px">Ingen noter endnu</div>';
+  el.innerHTML = `
+    <div style="font-size:12px;color:var(--gray);margin-bottom:12px">⚠ Kun synlig for dig — klienten kan ikke se dette</div>
+    ${listHtml}
+    <textarea class="note-area" id="new-note-${clientId}" placeholder="Ny note — fx hvad der er snakket om sidst, vigtige ting, målsætninger, ting der skal passe på…"></textarea>
+    <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="addClientNote(${clientId})">Tilføj note</button>`;
+}
+
+async function addClientNote(clientId) {
+  const input = document.getElementById('new-note-' + clientId);
+  const text = input.value.trim();
+  if (!text) return;
+  const { error } = await sb.from('client_notes').insert({ id: genId(), client_id: clientId, date: todayLocalStr(), text });
+  if (error) { showToast('Kunne ikke gemme noten'); return; }
+  showToast('Note tilføjet');
+  renderDetailNotes(clientId);
+}
+
+async function deleteClientNote(clientId, noteId) {
+  if (!confirm('Slet denne note? Den kan ikke gendannes.')) return;
+  const { error } = await sb.from('client_notes').delete().eq('id', noteId);
+  if (error) { showToast('Kunne ikke slette noten'); return; }
+  renderDetailNotes(clientId);
 }
 
 // Kort status + handling til login-kode-feltet i klientens indstillinger —
