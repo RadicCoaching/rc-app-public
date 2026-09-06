@@ -6045,6 +6045,14 @@ let openTemplateGroups = new Set();      // nøgle: fokus-navn (skabeloner)
 let openProgramGroups = new Set();       // nøgle: `${clientId}::${fokus}`
 let openProgramCards = new Set();        // nøgle: program.id
 let openHistoryGroups = new Set();       // nøgle: 'checkin' | 'training' | 'meal'
+// Kost-log på coachens klientside hentede ALLE et klients måltidsbilleder på
+// én gang ved åbning (ingen loft, modsat klientens egen "Kost"-fane) — for en
+// længe-aktiv klient kunne det udløse dusinvis af samtidige signerede
+// URL-opslag, som på en langsom mobilforbindelse fejlede i baggrunden uden
+// nogen synlig fejl (se setResolvableImgSrc). Loft + "vis flere" tilføjet
+// 2026-09-06 for at undgå den byge af samtidige kald.
+const COACH_MEAL_PHOTOS_PAGE = 20;
+let coachMealPhotosVisible = COACH_MEAL_PHOTOS_PAGE;
 
 function toggleTemplateGroup(encodedFocus) {
   const focus = decodeURIComponent(encodedFocus);
@@ -6423,17 +6431,29 @@ function setResolvableImgSrc(imgEl, value, bucket) {
     imgEl.src = value;
     return;
   }
-  resolveExerciseMediaUrl(bucket, value).then(url => {
+  const attempt = () => resolveExerciseMediaUrl(bucket, value).then(url => {
     if (url) {
       imgEl.src = url;
+      imgEl.alt = '';
+      imgEl.style.opacity = '';
+      imgEl.title = '';
+      imgEl.onclick = () => openPhotoViewer(imgEl.src);
     } else {
-      // Fejlen er allerede logget i resolveExerciseMediaUrl() — visuelt
-      // markeret her, så en tom kasse ikke er umulig at skelne fra "intet
-      // billede sat" i selve appen (kun synligt i konsollen ellers).
-      imgEl.style.opacity = '0.3';
-      imgEl.title = 'Kunne ikke hente billedet — se browser-konsollen';
+      // Fejlen er allerede logget i resolveExerciseMediaUrl() — men en
+      // fejl her viste FØR kun op som en helt tom, usynlig kasse (ingen
+      // src sat overhovedet), med en title-tekst der kun vises ved hover
+      // og derfor aldrig ses på en touchskærm (Rune, 2026-09-06: "kan se
+      // at alle Lorenas billeder i kost loggen er væk" — viste sig at
+      // være netop dette, ikke tabt data). alt-teksten vises nu altid i
+      // stedet for det tomme billede, og et tryk prøver igen — ofte en
+      // midlertidig netværksfejl, ikke en permanent fejl.
+      imgEl.alt = '⚠ Kunne ikke hente billedet — tryk for at prøve igen';
+      imgEl.style.opacity = '0.6';
+      imgEl.title = 'Tryk for at prøve igen';
+      imgEl.onclick = attempt;
     }
   });
+  attempt();
 }
 
 function saveLibraryExercise() {
@@ -6494,6 +6514,7 @@ function refreshAllLibraryViews() {
 // ══════════════════════════════════════
 function openClientDetail(clientId) {
   currentClientId = clientId;
+  coachMealPhotosVisible = COACH_MEAL_PHOTOS_PAGE;
   const client = DATA.clients.find(c => c.id === clientId);
   document.getElementById('detail-client-name').textContent = client.name;
   document.getElementById('detail-client-pin').textContent = clientLoginStatusLabel(client);
@@ -6650,7 +6671,10 @@ function renderDetailHistory(clientId) {
       </div>
       ${isOpen ? `<div style="padding:0 14px 12px">
         ${sec.key === 'samtale' ? `<button class="btn btn-sm btn-primary btn-block" style="margin-bottom:10px" onclick="openConversationLogModal(${clientId})">+ Ny samtale</button>` : ''}
-        ${sec.key === 'meal' ? renderMealSectionBody(sec.items) : sorted.map(renderItem).join('')}
+        ${sec.key === 'meal'
+          ? renderMealSectionBody(sorted.slice(0, coachMealPhotosVisible))
+            + (sorted.length > coachMealPhotosVisible ? `<div class="card-sub" style="cursor:pointer;color:var(--accent);margin-top:8px" onclick="coachMealPhotosVisible += ${COACH_MEAL_PHOTOS_PAGE}; renderDetailHistory(${clientId})">Vis ${Math.min(COACH_MEAL_PHOTOS_PAGE, sorted.length - coachMealPhotosVisible)} flere</div>` : '')
+          : sorted.map(renderItem).join('')}
       </div>` : ''}
     </div>`;
   }).join('');
