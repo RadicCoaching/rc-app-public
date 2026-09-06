@@ -531,6 +531,7 @@ body::before{
     <div class="client-header">
       <div class="client-header-name" id="detail-client-name"></div>
       <div style="font-size:12px;color:var(--gray);margin-top:4px" id="detail-client-pin"></div>
+      <div style="font-size:12px;color:var(--gray);margin-top:2px" id="detail-client-started"></div>
     </div>
     <div class="client-header-tabs">
       <button class="client-tab active" onclick="clientTab('history')">Historik</button>
@@ -2437,6 +2438,12 @@ async function refreshFromSupabase() {
         tanitaScan: !!c.feature_tanita_scan
       },
       notes: c.notes || '', autoReply: c.auto_reply || '',
+      // Opstartsdato (2026-09-06, Rune: "jeg sætter ikke nogen ind som ikke
+      // er opstartet, så tidspunkt for oprettelse er også start tidspunktet")
+      // — created_at fandtes allerede i databasen, men blev ikke vist noget
+      // sted. NB: de fire ældste klienter (oprettet før denne kolonne fandtes)
+      // deler alle samme, betydningsløse tidsstempel — se formatClientStarted().
+      createdAt: c.created_at || null,
       warmup: c.warmup || null,
       dataRetentionUntil: c.data_retention_until || null,
       exercisePhotos: photosByClient[c.id] || {},
@@ -6490,6 +6497,7 @@ function openClientDetail(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   document.getElementById('detail-client-name').textContent = client.name;
   document.getElementById('detail-client-pin').textContent = clientLoginStatusLabel(client);
+  document.getElementById('detail-client-started').textContent = formatClientStarted(client.createdAt);
   document.querySelectorAll('.coach-view').forEach(v => v.style.display = 'none');
   const detail = document.getElementById('coach-client-detail');
   detail.style.display = 'flex';
@@ -11663,6 +11671,25 @@ function pvDist(touches) {
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
 });
+
+// Opstartsdato (2026-09-06) — se DATA.clients-mapping for baggrunden. De
+// fire klienter oprettet FØR created_at-kolonnen fandtes fik alle nøjagtig
+// samme tidsstempel ved en baggrunds-udfyldning ("2026-07-22T17:08:28") —
+// det er IKKE deres rigtige opstartsdato, så den vises tydeligt anderledes
+// i stedet for at lade som om det er en præcis dato.
+const CREATED_AT_BACKFILL_PREFIX = '2026-07-22T17:08:28';
+function formatClientStarted(createdAt) {
+  if (!createdAt) return '';
+  if (createdAt.startsWith(CREATED_AT_BACKFILL_PREFIX)) {
+    return 'Opstartsdato ukendt (oprettet før vi begyndte at gemme den)';
+  }
+  const started = new Date(createdAt);
+  const days = Math.floor((Date.now() - started.getTime()) / 86400000);
+  const weeks = Math.floor(days / 7);
+  const months = Math.floor(days / 30);
+  const ago = months >= 2 ? `${months} måneder siden` : weeks >= 2 ? `${weeks} uger siden` : days >= 1 ? `${days} dag${days === 1 ? '' : 'e'} siden` : 'i dag';
+  return `Opstartet ${fmtDate(createdAt.slice(0, 10))} — ${ago}`;
+}
 
 function fmtDate(dateStr) {
   const d = new Date(dateStr + 'T12:00:00');
