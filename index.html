@@ -3719,7 +3719,37 @@ function renderCoachDashboard() {
         <div class="status-dot ${dotClass}"></div>
       </div>`;
     };
-    let listHtml = activeClients.map(rowFn).join('');
+    // Rune, 2026-09-07: "klientlisten på forsiden skal vise grupperinger
+    // jeg kan lukke og åbne for" — samme funktion som allerede findes i
+    // rc-mobile (CoachDashboardScreen.tsx, 2026-09-02), nu porteret til
+    // web. Genbruger den eksisterende klient-grupper-datamodel
+    // (coach_status.client_groups / clients.groups) og den allerede
+    // eksisterende lazy-load-cache (ensureClientGroupsLoaded/
+    // clientGroupsSessionCache) — ingen ny datamodel eller nyt opslag.
+    if (!clientGroupsSessionCache) {
+      ensureClientGroupsLoaded(() => { if (currentUser === 'coach') renderCoachDashboard(); });
+    }
+    const groupNames = clientGroupsSessionCache ? clientGroupsSessionCache.names : [];
+    let listHtml;
+    if (!groupNames.length) {
+      // Ingen grupper oprettet endnu — uændret, flad liste (ingen synlig
+      // ændring før hun selv opretter en gruppe, matcher mobil-versionen).
+      listHtml = activeClients.map(rowFn).join('');
+    } else {
+      const byClient = clientGroupsSessionCache.byClient;
+      const groupSection = (name, members) => {
+        const open = openDashboardGroups.has(name);
+        return `<div class="section-head" style="margin-top:20px;cursor:pointer;display:flex;align-items:center;gap:6px" onclick='toggleDashboardGroup(${JSON.stringify(name)})'>
+          <span style="font-size:11px">${open ? '▾' : '▸'}</span> 👥 ${escapeHtml(name)} (${members.length})
+        </div>` + (open ? members.map(rowFn).join('') : '');
+      };
+      listHtml = groupNames.map(name => {
+        const members = activeClients.filter(c => (byClient[c.id] || []).includes(name));
+        return groupSection(name, members);
+      }).join('');
+      const ungrouped = activeClients.filter(c => !(byClient[c.id] || []).length);
+      if (ungrouped.length) listHtml += groupSection('Ugrupperet', ungrouped);
+    }
     if (endingClients.length) {
       listHtml += `<div class="section-head" style="margin-top:20px">⏳ I afslutningsfase (${endingClients.length})</div>`
         + endingClients.map(rowFn).join('');
@@ -6045,6 +6075,11 @@ let openTemplateGroups = new Set();      // nøgle: fokus-navn (skabeloner)
 let openProgramGroups = new Set();       // nøgle: `${clientId}::${fokus}`
 let openProgramCards = new Set();        // nøgle: program.id
 let openHistoryGroups = new Set();       // nøgle: 'checkin' | 'training' | 'meal'
+let openDashboardGroups = new Set();     // klientlistens gruppe-sektioner — starter alle sammenfoldet
+function toggleDashboardGroup(name) {
+  openDashboardGroups.has(name) ? openDashboardGroups.delete(name) : openDashboardGroups.add(name);
+  renderCoachDashboard();
+}
 // Kost-log på coachens klientside hentede ALLE et klients måltidsbilleder på
 // én gang ved åbning (ingen loft, modsat klientens egen "Kost"-fane) — for en
 // længe-aktiv klient kunne det udløse dusinvis af samtidige signerede
