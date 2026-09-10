@@ -1981,13 +1981,39 @@ async function pushToSupabase() {
   });
 
   // Programmer + blokke — opdater/indsæt, slet kun eksplicit fjernede blokke/programmer
+  //
+  // RETTET (2026-09-10, "rod i rækkefølgen"-3. gentagelse, rettet ved ROD):
+  // Rune: "Har rettet min upper A men fejlen skal findes." De to tidligere
+  // rettelser (2026-08-30 mobil, 2026-09-04 web/insertExerciseBlockAt) ramte
+  // begge KUN hvordan en forkert rækkefølge kunne opstå LOKALT — ingen af dem
+  // rørte ved DENNE funktion, som skriver sort_order for ALLE klienters ALLE
+  // programmer/blokke ved HVER ENESTE gem-handling i hele appen (fx en note på
+  // Christians øvelse, eller Anettes km-indstilling) — ikke kun når man rent
+  // faktisk redigerer den pågældende klients program. sort_order blev hidtil
+  // genberegnet fra den lokale array-POSITION (pi/bi) i DATA på gemme-
+  // tidspunktet. DATA opdateres kun ved login, hver 45. sekund
+  // (pollForUpdates — som eksplicit SPRINGES OVER mens man står og skriver et
+  // sted i appen, se pollForUpdates()), eller ved en eksplicit refresh. Sad
+  // Rune i en anden fane/enhed og skrev i et tekstfelt i flere minutter,
+  // mens rækkefølgen blev ændret et andet sted (fx fra mobilen, eller fra en
+  // anden fane) — havde DENNE fanes DATA en forældet kopi af rækkefølgen,
+  // som derefter blev skrevet tilbage over den rigtige, så snart NOGET som
+  // helst blev gemt i denne fane. Stille, uden fejl, uden relation til hvad
+  // man faktisk redigerede.
+  //
+  // Fix: sort_order sendes nu fra objektets EGET, eksplicit tildelte
+  // `sortOrder`-felt (sat præcis når en reel omrokering sker — saveProgram(),
+  // moveProgramBlock(), migrateContentToBlocks() — se disse), IKKE genberegnet
+  // fra array-position her. Et program/blok uden `sortOrder` (bør ikke
+  // forekomme længere, men som sikkerhedsnet for gamle/uventede tilfælde)
+  // falder tilbage til array-position, præcis som før.
   await section('programs+blocks', async () => {
     const allPrograms = [], allBlocks = [];
     DATA.clients.forEach(c => {
       (c.programs || []).forEach((p, pi) => {
-        allPrograms.push({ id: p.id, client_id: c.id, name: p.name, focus: p.focus || null, sort_order: pi });
+        allPrograms.push({ id: p.id, client_id: c.id, name: p.name, focus: p.focus || null, sort_order: p.sortOrder != null ? p.sortOrder : pi });
         (p.blocks || []).forEach((b, bi) => {
-          allBlocks.push({ id: b.id, program_id: p.id, type: b.type, text: b.text || null, library_id: b.libraryId || null, sets_reps: b.setsReps || null, sets: b.sets != null ? b.sets : null, reps: b.reps != null ? b.reps : null, reps_range_text: b.repsRangeText || null, ss: b.ss || null, sort_order: bi, note: b.note || null });
+          allBlocks.push({ id: b.id, program_id: p.id, type: b.type, text: b.text || null, library_id: b.libraryId || null, sets_reps: b.setsReps || null, sets: b.sets != null ? b.sets : null, reps: b.reps != null ? b.reps : null, reps_range_text: b.repsRangeText || null, ss: b.ss || null, sort_order: b.sortOrder != null ? b.sortOrder : bi, note: b.note || null });
         });
       });
     });
@@ -2379,7 +2405,11 @@ async function refreshFromSupabase() {
     const blocksByProgram = {};
     (blocksRes.data || []).sort((a, b) => a.sort_order - b.sort_order).forEach(b => {
       (blocksByProgram[b.program_id] = blocksByProgram[b.program_id] || []).push({
-        id: b.id, type: b.type, text: b.text || undefined, libraryId: b.library_id || undefined, setsReps: b.sets_reps || undefined, sets: b.sets != null ? b.sets : undefined, reps: b.reps != null ? b.reps : undefined, repsRangeText: b.reps_range_text || undefined, ss: b.ss || undefined, note: b.note || undefined
+        id: b.id, type: b.type, text: b.text || undefined, libraryId: b.library_id || undefined, setsReps: b.sets_reps || undefined, sets: b.sets != null ? b.sets : undefined, reps: b.reps != null ? b.reps : undefined, repsRangeText: b.reps_range_text || undefined, ss: b.ss || undefined, note: b.note || undefined,
+        // RETTET (2026-09-10, "rod i rækkefølgen"-3. gentagelse): sort_order fra
+        // databasen bevares nu PÅ selve objektet. Se pushToSupabase()'s
+        // programs+blocks-sektion for hvorfor dette var nødvendigt.
+        sortOrder: b.sort_order
       });
     });
 
@@ -2412,7 +2442,8 @@ async function refreshFromSupabase() {
     const programsByClient = {};
     (progRes.data || []).sort((a, b) => a.sort_order - b.sort_order).forEach(p => {
       (programsByClient[p.client_id] = programsByClient[p.client_id] || []).push({
-        id: p.id, name: p.name, focus: p.focus || '', blocks: blocksByProgram[p.id] || [], weightLogs: weightLogsByProgram[p.id] || {}
+        id: p.id, name: p.name, focus: p.focus || '', blocks: blocksByProgram[p.id] || [], weightLogs: weightLogsByProgram[p.id] || {},
+        sortOrder: p.sort_order
       });
     });
 
@@ -6751,6 +6782,12 @@ function moveProgramBlock(clientId, programId, index, direction) {
   const tmp = program.blocks[index];
   program.blocks[index] = program.blocks[otherIndex];
   program.blocks[otherIndex] = tmp;
+  // sortOrder følger med objektet, ikke array-positionen — skal derfor byttes
+  // eksplicit, ellers "vinder" den forkerte værdi tilbage ved næste gem
+  // nogen andet sted i appen (se pushToSupabase()).
+  const tmpOrder = program.blocks[index].sortOrder;
+  program.blocks[index].sortOrder = program.blocks[otherIndex].sortOrder;
+  program.blocks[otherIndex].sortOrder = tmpOrder;
   save();
   renderDetailProgram(clientId);
 }
@@ -7244,8 +7281,13 @@ function saveProgram(clientId) {
   const name = document.getElementById('prog-name-' + clientId).value.trim() || 'Program';
   const focusEl = document.getElementById('prog-focus-' + clientId);
   const focus = focusEl ? focusEl.value.trim() : '';
+  // sortOrder tildeles her, ud fra editingProgramBlocks' ENDELIGE rækkefølge —
+  // det er det ene sted brugeren netop har bekræftet "sådan skal den se ud",
+  // så det er sikkert at nummerere 0..N-1 her. Se pushToSupabase() for hvorfor
+  // dette ikke længere sker (blindt, muligvis på forældet data) ved hver gem.
+  editingProgramBlocks.forEach((b, i) => { b.sortOrder = i; });
   if (editingProgramId === 'new') {
-    client.programs.push({ id: Date.now(), name, focus, weightLogs: {}, blocks: editingProgramBlocks });
+    client.programs.push({ id: Date.now(), name, focus, weightLogs: {}, blocks: editingProgramBlocks, sortOrder: (client.programs || []).length });
   } else {
     const program = client.programs.find(p => p.id === editingProgramId);
     const oldIds = new Set((program.blocks || []).map(b => b.id));
@@ -8500,6 +8542,7 @@ function migrateContentToBlocks(program, library) {
       blocks.push({ id: genId(), type: 'exercise', libraryId: lib.id, setsReps });
     }
   });
+  blocks.forEach((b, i) => { b.sortOrder = i; });
   program.blocks = blocks;
   delete program.content;
 }
