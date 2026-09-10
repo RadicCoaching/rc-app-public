@@ -1767,7 +1767,12 @@ function todayLocalStr() {
   return toLocalDateStr(new Date());
 }
 
-const EXERCISE_CATEGORIES = ['Ben', 'Ryg', 'Bryst', 'Skuldre', 'Arme', 'Core', 'Cardio', 'Mobilitet', 'Fuldkrops/Funktionel styrke', 'Andet'];
+// Udvidet 2026-09-10 (Rune): "Ben" og "Arme" var for brede til at vise reelt
+// fokus — Baller/Biceps/Triceps/Greb tilføjet som mere præcise kategorier.
+// "Ben" og "Arme" er bevidst BEVARET som brede kategorier ved siden af — til
+// øvelser der rammer noget udover det snævre fokus (fx Dødløft rammer også
+// ryg, Dips rammer også bryst), i stedet for at tvinge dem ind et forkert sted.
+const EXERCISE_CATEGORIES = ['Ben', 'Baller', 'Ryg', 'Bryst', 'Skuldre', 'Arme', 'Biceps', 'Triceps', 'Greb', 'Core', 'Cardio', 'Mobilitet', 'Fuldkrops/Funktionel styrke', 'Andet'];
 
 let DATA = loadData();
 
