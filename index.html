@@ -1634,6 +1634,9 @@ function loadData() {
         if (c.sex === undefined) c.sex = null;
         if (c.pal === undefined) c.pal = null;
         if (!c.trainingGoals) c.trainingGoals = [];
+        if (c.dualGoalsEnabled === undefined) c.dualGoalsEnabled = false;
+        if (!c.trainingGoalSets) c.trainingGoalSets = [];
+        if (c.activeGoalSetId === undefined) c.activeGoalSetId = null;
         if (c.showTrainingGoal === undefined) c.showTrainingGoal = false;
         if (c.trainingPause === undefined) c.trainingPause = null;
         if (!c.celebrated) c.celebrated = {};
@@ -1994,6 +1997,9 @@ async function pushToSupabase() {
         feature_tanita_scan: !!(c.features && c.features.tanitaScan),
         feature_meals: !!(c.features && c.features.mealsLog),
         training_goals: c.trainingGoals || [],
+        feature_dual_training_goals: !!c.dualGoalsEnabled,
+        training_goal_sets: c.trainingGoalSets || [],
+        active_goal_set_id: c.activeGoalSetId || null,
         show_training_goal: !!c.showTrainingGoal,
         training_pause: c.trainingPause || null,
         celebrated: c.celebrated || {},
@@ -2487,7 +2493,9 @@ async function refreshFromSupabase() {
       birthMonth: c.birth_month || null, birthDay: c.birth_day || null, sex: c.sex, pal: c.pal,
       weightGoal: c.weight_goal || null,
       visibleStats: { weight: !!c.show_weight, bmi: !!c.show_bmi, bmr: !!c.show_bmr, kcal: !!c.show_kcal, weightGoal: !!c.show_weight_goal, sessionsLeft: !!c.show_sessions_left, distanceKm: !!c.show_distance_km },
-      trainingGoals: c.training_goals || [], showTrainingGoal: !!c.show_training_goal,
+      trainingGoals: c.training_goals || [],
+      dualGoalsEnabled: !!c.feature_dual_training_goals, trainingGoalSets: c.training_goal_sets || [], activeGoalSetId: c.active_goal_set_id || null,
+      showTrainingGoal: !!c.show_training_goal,
       trainingPause: c.training_pause || null, celebrated: c.celebrated || {}, coachNotifiedGoals: c.coach_notified_goals || {},
       clientSeenSlotIds: c.client_seen_slot_ids || [], clientSeenMessageIds: c.client_seen_message_ids || [],
       focusEnabled: !!c.focus_enabled, focusOverall: c.focus_overall || '', focusCurrent: c.focus_current || '',
@@ -10185,6 +10193,22 @@ function isDateInWeekKey(dateStr, weekKey) {
   return getMondayOf(dateStr) === weekKey;
 }
 
+// Differentierede træningsmål (2026-09-10, matcher rc-mobiles
+// trainingGoals.ts) — klienten kan have to eller flere navngivne målsæt
+// (fx "Hjemme"/"Offshore") og selv vælge hvilket der er aktivt. Allerede
+// loggede træninger den uge tæller stadig med mod det nye mål uanset
+// skift, fordi computeTrainingProgress/computeWeeklyStreak nedenfor er
+// UÆNDREDE og blot fodres med det aktive sæts goals i stedet for det
+// flade client.trainingGoals — optællingen kigger kun på loggede
+// træningers `type`, aldrig på hvornår et skift skete.
+function effectiveTrainingGoals(client) {
+  if (client.dualGoalsEnabled && client.trainingGoalSets && client.trainingGoalSets.length) {
+    const set = client.trainingGoalSets.find(s => s.id === client.activeGoalSetId) || client.trainingGoalSets[0];
+    return (set && set.goals) || [];
+  }
+  return client.trainingGoals || [];
+}
+
 function computeTrainingProgress(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client) return null;
@@ -10192,7 +10216,7 @@ function computeTrainingProgress(clientId) {
     return { paused: true, resumeDate: client.trainingPause.until || null };
   }
   const weekKey = currentWeekKey();
-  const goals = client.trainingGoals || [];
+  const goals = effectiveTrainingGoals(client);
   const goalTypes = new Set(goals.map(g => g.type));
   const checkinsThisWeek = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId && isDateInWeekKey(t.date, weekKey));
   // NYT (session 11) — samlet km denne uge for distance-typer (Løb, og — når slået til —
@@ -10241,7 +10265,7 @@ const MAX_STREAK_WEEKS = 52; // 1 år, praktisk loft mod uendelig løkke
 function computeWeeklyStreak(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client || (client.trainingPause && client.trainingPause.active)) return 0;
-  const goals = client.trainingGoals || [];
+  const goals = effectiveTrainingGoals(client);
   if (!goals.length) return 0;
   const allCheckins = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId);
 
@@ -10613,8 +10637,18 @@ function renderTrainingProgressWidget(clientId, isCoachView) {
       const streakHtml = streakCount >= 2
         ? `<span style="float:right;color:var(--accent);font-weight:800;font-size:13px">🔥 ${streakCount} uger i træk</span>`
         : '';
+      // Differentierede målsæt (2026-09-10) — klienten skifter selv mellem
+      // sine navngivne målsæt (fx "Hjemme"/"Offshore") herfra, se
+      // switchGoalSet(). Kun vist til klienten selv (ikke coach-visningen),
+      // og kun når mindst to sæt findes.
+      const goalSetSwitcherHtml = (!isCoachView && client.dualGoalsEnabled && client.trainingGoalSets && client.trainingGoalSets.length > 1)
+        ? `<div style="display:flex;gap:8px;margin-bottom:12px">
+            ${client.trainingGoalSets.map(s => `<button class="btn btn-sm" style="flex:1;justify-content:center;${s.id === client.activeGoalSetId ? 'background:var(--accent);color:#0C0C0C;border-color:var(--accent)' : ''}" onclick="switchGoalSet(${clientId}, ${s.id})">${escapeHtml(s.name || 'Sæt')}</button>`).join('')}
+          </div>`
+        : '';
       goalHtml = `<div class="card" style="margin-bottom:16px">
         <div class="card-title" style="margin-bottom:10px">Ugens træning${prog.overallDone ? ' — mål nået! 🎉' : ''}${streakHtml}</div>
+        ${goalSetSwitcherHtml}
         ${rows}
         ${extraRows}
       </div>`;
@@ -11450,12 +11484,46 @@ function renderTrainingGoalsSettings(clientId) {
       <button class="btn-icon" onclick="removeTrainingGoal(${clientId}, ${g.id})" style="background:none;border:none;color:var(--gray);cursor:pointer;font-size:16px">×</button>
     </div>`).join('');
 
+  // Differentierede træningsmål (2026-09-10, matcher rc-mobiles
+  // EditClientScreen.tsx) — klienten kan have to eller flere navngivne
+  // målsæt og selv vælge hvilket der er aktivt (se switchGoalSet() og
+  // renderTrainingProgressWidget()). Slukket: alt opfører sig som hidtil
+  // (goalRows ovenfor, uændret). Tændt: coachen redigerer i stedet N
+  // navngivne sæt herunder.
+  const goalSetsHtml = (client.trainingGoalSets || []).map(s => `
+    <div style="background:var(--bg2);border-radius:var(--radius-sm);padding:10px;margin-top:10px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <input type="text" value="${escapeHtml(s.name || '')}" placeholder="Navn på målsæt, fx Hjemme" style="flex:1" onchange="updateGoalSetName(${clientId}, ${s.id}, this.value)">
+        <button class="btn-icon" onclick="removeGoalSet(${clientId}, ${s.id})" style="background:none;border:none;color:var(--gray);cursor:pointer;font-size:16px">×</button>
+      </div>
+      ${(s.goals || []).map(g => `
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <select style="flex:1.4" onchange="updateGoalInSet(${clientId}, ${s.id}, ${g.id}, 'type', this.value)">
+            ${(DATA.trainingTypes || []).map(t => `<option value="${escapeHtml(t)}" ${t === g.type ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+          </select>
+          <span style="font-size:13px;color:var(--gray)">×</span>
+          <input type="number" min="1" value="${g.target}" style="width:60px" onchange="updateGoalInSet(${clientId}, ${s.id}, ${g.id}, 'target', this.value)">
+          <span style="font-size:13px;color:var(--gray)">/uge</span>
+          <button class="btn-icon" onclick="removeGoalFromSet(${clientId}, ${s.id}, ${g.id})" style="background:none;border:none;color:var(--gray);cursor:pointer;font-size:16px">×</button>
+        </div>`).join('') || '<div class="card-sub" style="margin-bottom:6px">Ingen mål sat endnu.</div>'}
+      <button class="btn btn-sm" onclick="addGoalToSet(${clientId}, ${s.id})">+ Tilføj mål til ${escapeHtml(s.name || 'sættet')}</button>
+    </div>`).join('');
+
   const pause = client.trainingPause || { active: false, until: '' };
   return `<div class="card" style="margin-bottom:16px">
     <div class="card-title" style="margin-bottom:2px">Ugentligt træningsmål</div>
     <div class="card-sub" style="margin-bottom:12px">Fx "Løb × 1" + "Styrke × 2" — hver del fejres for sig, og der kommer en ekstra fejring når hele ugens mål er nået.</div>
-    ${goalRows || '<div class="card-sub" style="margin-bottom:8px">Ingen mål sat endnu.</div>'}
-    <button class="btn btn-sm" onclick="addTrainingGoal(${clientId})" style="margin-top:4px">+ Tilføj mål</button>
+    <div style="display:flex;align-items:center;gap:12px;padding:4px 0 12px">
+      <button class="toggle ${client.dualGoalsEnabled ? 'on' : ''}" onclick="toggleDualGoals(${clientId})"></button>
+      <span class="toggle-label"><strong>Differentierede målsæt (klienten vælger selv)</strong> — fx "Hjemme"/"Offshore". Allerede loggede træninger tæller med uanset hvilket sæt der er aktivt.</span>
+    </div>
+    ${client.dualGoalsEnabled ? `
+      ${goalSetsHtml}
+      <button class="btn btn-sm" onclick="addGoalSet(${clientId})" style="margin-top:10px">+ Tilføj målsæt</button>
+    ` : `
+      ${goalRows || '<div class="card-sub" style="margin-bottom:8px">Ingen mål sat endnu.</div>'}
+      <button class="btn btn-sm" onclick="addTrainingGoal(${clientId})" style="margin-top:4px">+ Tilføj mål</button>
+    `}
     <div class="divider" style="margin:14px 0"></div>
     <div class="card-sub" style="margin-bottom:6px">Træningstyper (delt for alle klienter)</div>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
@@ -11503,6 +11571,86 @@ function removeTrainingGoal(clientId, goalId) {
   client.trainingGoals = (client.trainingGoals || []).filter(g => g.id !== goalId);
   save();
   renderDetailSettings(clientId);
+}
+
+// Differentierede træningsmål (2026-09-10) — samme CRUD-mønster som
+// addTrainingGoal() m.fl. ovenfor, bare nestet under det relevante målsæt.
+function toggleDualGoals(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  client.dualGoalsEnabled = !client.dualGoalsEnabled;
+  if (client.dualGoalsEnabled && (!client.trainingGoalSets || !client.trainingGoalSets.length)) {
+    client.trainingGoalSets = [
+      { id: genId(), name: 'Hjemme', goals: [] },
+      { id: genId(), name: 'Offshore', goals: [] }
+    ];
+  }
+  save();
+  renderDetailSettings(clientId);
+}
+
+function addGoalSet(clientId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  if (!client.trainingGoalSets) client.trainingGoalSets = [];
+  client.trainingGoalSets.push({ id: genId(), name: '', goals: [] });
+  save();
+  renderDetailSettings(clientId);
+}
+
+function updateGoalSetName(clientId, setId, name) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  const set = (client.trainingGoalSets || []).find(s => s.id === setId);
+  if (!set) return;
+  set.name = name;
+  save();
+}
+
+function removeGoalSet(clientId, setId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  client.trainingGoalSets = (client.trainingGoalSets || []).filter(s => s.id !== setId);
+  if (client.activeGoalSetId === setId) client.activeGoalSetId = null;
+  save();
+  renderDetailSettings(clientId);
+}
+
+function addGoalToSet(clientId, setId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  const set = (client.trainingGoalSets || []).find(s => s.id === setId);
+  if (!set) return;
+  if (!set.goals) set.goals = [];
+  const defaultType = (DATA.trainingTypes && DATA.trainingTypes[0]) || 'Andet';
+  set.goals.push({ id: genId(), type: defaultType, target: 1 });
+  save();
+  renderDetailSettings(clientId);
+}
+
+function updateGoalInSet(clientId, setId, goalId, field, value) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  const set = (client.trainingGoalSets || []).find(s => s.id === setId);
+  const goal = set && (set.goals || []).find(g => g.id === goalId);
+  if (!goal) return;
+  goal[field] = field === 'target' ? (parseInt(value, 10) || 1) : value;
+  save();
+}
+
+function removeGoalFromSet(clientId, setId, goalId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  const set = (client.trainingGoalSets || []).find(s => s.id === setId);
+  if (!set) return;
+  set.goals = (set.goals || []).filter(g => g.id !== goalId);
+  save();
+  renderDetailSettings(clientId);
+}
+
+// Klientens eget skift mellem målsæt (fx "Hjemme"/"Offshore") — se
+// effectiveTrainingGoals() ovenfor. Genberegner med det samme, ingen
+// genindlæsning nødvendig.
+function switchGoalSet(clientId, newSetId) {
+  const client = DATA.clients.find(c => c.id === clientId);
+  if (!client) return;
+  client.activeGoalSetId = newSetId;
+  save();
+  const widgetEl = document.getElementById('client-home-training-widget');
+  if (widgetEl) widgetEl.innerHTML = renderTrainingProgressWidget(clientId, false);
 }
 
 function addTrainingType(clientId) {
