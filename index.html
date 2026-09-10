@@ -611,7 +611,7 @@ body::before{
       </div>
       <div style="display:flex;gap:10px;margin:-8px 0 16px">
         <button class="btn" style="flex:1;justify-content:center" onclick="openTrainingCheckinModal()">🏃 Log træning</button>
-        <button class="btn" style="flex:1;justify-content:center" onclick="openMealLogModal()">🍽️ Log måltid</button>
+        <button class="btn" id="client-meal-log-btn" style="flex:1;justify-content:center;display:none" onclick="openMealLogModal()">🍽️ Log måltid</button>
       </div>
       <div style="display:flex;gap:10px;margin:-8px 0 16px">
         <button class="btn" id="client-scan-tanita-btn" style="flex:1;justify-content:center;display:none" onclick="openScanTanitaModal(currentUser)">📷 Scan kropsanalyse</button>
@@ -1647,9 +1647,10 @@ function loadData() {
         if (!c.visibleStats) c.visibleStats = { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false };
         if (c.visibleStats.sessionsLeft === undefined) c.visibleStats.sessionsLeft = false;
         if (c.visibleStats.distanceKm === undefined) c.visibleStats.distanceKm = false;
-        if (!c.features) c.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false };
+        if (!c.features) c.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false, mealsLog: false };
         if (c.features.gpsTraining === undefined) c.features.gpsTraining = false;
         if (c.features.tanitaScan === undefined) c.features.tanitaScan = false;
+        if (c.features.mealsLog === undefined) c.features.mealsLog = false;
         if (c.focusEnabled === undefined) c.focusEnabled = false;
         if (c.focusOverall === undefined) c.focusOverall = '';
         if (c.focusCurrent === undefined) c.focusCurrent = '';
@@ -1991,6 +1992,7 @@ async function pushToSupabase() {
         feature_multiple_checkins: !!(c.features && c.features.multipleCheckins),
         feature_gps_training: !!(c.features && c.features.gpsTraining),
         feature_tanita_scan: !!(c.features && c.features.tanitaScan),
+        feature_meals: !!(c.features && c.features.mealsLog),
         training_goals: c.trainingGoals || [],
         show_training_goal: !!c.showTrainingGoal,
         training_pause: c.trainingPause || null,
@@ -2494,7 +2496,8 @@ async function refreshFromSupabase() {
         freeMessage: c.feature_free_message !== undefined ? !!c.feature_free_message : true,
         multipleCheckins: !!c.feature_multiple_checkins,
         gpsTraining: !!c.feature_gps_training,
-        tanitaScan: !!c.feature_tanita_scan
+        tanitaScan: !!c.feature_tanita_scan,
+        mealsLog: !!c.feature_meals
       },
       notes: c.notes || '', autoReply: c.auto_reply || '',
       // Opstartsdato (2026-09-06, Rune: "jeg sætter ikke nogen ind som ikke
@@ -7809,9 +7812,13 @@ function renderDetailSettings(clientId) {
         <button class="toggle ${client.features.gpsTraining ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'gpsTraining')"></button>
         <span class="toggle-label"><strong>Live GPS-træning</strong> — knap til GPS-guidet løb (distance/tid måles automatisk) direkte fra "Log træning"</span>
       </div>
-      <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
         <button class="toggle ${client.features.tanitaScan ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'tanitaScan')"></button>
         <span class="toggle-label"><strong>Scan kropsanalyse (Tanita m.fl.)</strong> — kan selv foto-scanne og gemme kropsanalyse-værdier</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+        <button class="toggle ${client.features.mealsLog ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'mealsLog')"></button>
+        <span class="toggle-label"><strong>Kost-logning</strong> — kan logge måltider med billede/kcal-/proteinestimat</span>
       </div>
     </div>
     <div class="divider"></div>
@@ -7820,7 +7827,7 @@ function renderDetailSettings(clientId) {
 
 function toggleClientFeature(clientId, key) {
   const client = DATA.clients.find(c => c.id === clientId);
-  if (!client.features) client.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false };
+  if (!client.features) client.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false, mealsLog: false };
   client.features[key] = !client.features[key];
   save();
   renderDetailSettings(clientId);
@@ -8406,6 +8413,12 @@ function renderClientHome() {
 
   const scanBtnEl = document.getElementById('client-scan-tanita-btn');
   if (scanBtnEl) scanBtnEl.style.display = (client.features && client.features.tanitaScan) ? 'flex' : 'none';
+
+  // NY (2026-09-10, matcher rc-mobiles feature_meals): "Log måltid"-knappen
+  // stod hidtil altid fremme for alle klienter — nu en per-klient toggle,
+  // default slukket, samme mønster som Tanita-scan-knappen ovenfor.
+  const mealBtnEl = document.getElementById('client-meal-log-btn');
+  if (mealBtnEl) mealBtnEl.style.display = (client.features && client.features.mealsLog) ? 'flex' : 'none';
 
   const birthdayEl = document.getElementById('client-home-birthday-banner');
   if (birthdayEl) {
@@ -11169,6 +11182,21 @@ async function saveTanitaScan() {
     created_by: isCoachViewer ? 'coach' : 'client'
   });
   if (error) { showToast('⚠ Kunne ikke gemme: ' + (error.message || 'ukendt fejl')); return; }
+  // FIX (2026-09-10, samme fund som rc-mobile CHANGELOG.md): scanningens
+  // vægt blev hidtil KUN gemt i tanita_scans, aldrig synkroniseret til
+  // body_metrics — som er dér "BW" i øvelses-loggen og vægt-/skridt-
+  // gennemsnittet (renderProgressKrop, latestStepsAverage) rent faktisk
+  // læses fra. Samme "én måling pr. dato"-mønster som saveBodyMetric()
+  // ovenfor — opdaterer en evt. eksisterende måling for datoen i stedet
+  // for at duplikere, rører ikke et evt. allerede logget skridtetal.
+  if (tsResult.weight_kg != null) {
+    if (!DATA.bodyMetrics) DATA.bodyMetrics = [];
+    const existingMetric = DATA.bodyMetrics.find(m => m.clientId === tsTargetClientId && m.date === scanDate);
+    if (existingMetric) existingMetric.weight = tsResult.weight_kg;
+    else DATA.bodyMetrics.push({ id: Date.now(), clientId: tsTargetClientId, date: scanDate, weight: tsResult.weight_kg, steps: null });
+    DATA.bodyMetrics.sort((a, b) => a.date.localeCompare(b.date));
+    save();
+  }
   showToast('Scanning gemt ✅');
   tsPhotoDataUrl = null;
   tsResult = null;
