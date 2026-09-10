@@ -1082,6 +1082,29 @@ body::before{
   </div>
 </div>
 
+<!-- Slet øvelse der er i brug (2026-09-10) — se deleteLibraryExercise() for
+     rodårsagen: sletning har hidtil stille fjernet øvelsen fra alle
+     programmer der brugte den OG (via ON DELETE CASCADE i databasen)
+     permanent slettet al vægt-historik for den, med kun en generisk
+     confirm()-dialog og ingen synlighed af omfanget. -->
+<div class="modal-overlay" id="modal-library-delete-conflict">
+  <div class="modal">
+    <div class="modal-title">Øvelsen er i brug</div>
+    <div class="card-sub" id="library-delete-conflict-summary" style="margin-bottom:14px"></div>
+    <div id="library-delete-conflict-picker" style="display:none">
+      <div class="field"><label>Vælg erstatning</label>
+        <input type="text" id="library-delete-replacement-search" placeholder="Søg efter øvelse…" oninput="renderLibraryReplacementList()">
+      </div>
+      <div id="library-delete-replacement-list" style="max-height:240px;overflow-y:auto;margin-bottom:14px"></div>
+    </div>
+    <div class="modal-actions" id="library-delete-conflict-actions">
+      <button class="btn" onclick="closeModal('modal-library-delete-conflict')">Annuller</button>
+      <button class="btn btn-danger" onclick="confirmDeleteLibraryExerciseAnyway()">Slet alligevel</button>
+      <button class="btn btn-primary" onclick="showLibraryReplacementPicker()">Vælg erstatning…</button>
+    </div>
+  </div>
+</div>
+
 <!-- Foto-visning (fuld størrelse) — bruges for alle billeder klienter sender ind
      (kost-log, træning gennemført m.fl.), som ellers kun var vist som et lille
      thumbnail uden nogen måde at se det ordentligt eller "gå tilbage" fra. -->
@@ -6553,8 +6576,51 @@ function saveLibraryExercise() {
   showToast('Øvelse gemt');
 }
 
+// Tæller hvor meget af DATA der reelt refererer til en øvelse — brugt til at
+// afgøre om sletning kan ske med det samme, eller om coachen skal advares
+// først. Regnes ud fra den lokale DATA (allerede indlæst for alle klienter),
+// ingen ekstra database-forespørgsel nødvendig.
+function computeLibraryExerciseUsage(id) {
+  const clientNames = new Set();
+  let blockCount = 0, weightLogCount = 0, photoCount = 0;
+  DATA.clients.forEach(c => {
+    let usedByThisClient = false;
+    (c.programs || []).forEach(p => {
+      (p.blocks || []).forEach(b => {
+        if (b.type === 'exercise' && b.libraryId === id) { blockCount++; usedByThisClient = true; }
+      });
+      const logs = (p.weightLogs || {})[String(id)];
+      if (logs && logs.length) { weightLogCount += logs.length; usedByThisClient = true; }
+    });
+    if ((c.exercisePhotos || {})[String(id)]) { photoCount++; usedByThisClient = true; }
+    if (usedByThisClient) clientNames.add(c.name);
+  });
+  return { blockCount, weightLogCount, photoCount, clientNames: [...clientNames] };
+}
+
+let libraryDeletePendingId = null;
+
 function deleteLibraryExercise(id) {
-  if (!confirm('Slet denne øvelse fra kartoteket? Den forsvinder også fra programmer der bruger den.')) return;
+  const usage = computeLibraryExerciseUsage(id);
+  if (usage.blockCount === 0 && usage.weightLogCount === 0 && usage.photoCount === 0) {
+    if (!confirm('Slet denne øvelse fra kartoteket?')) return;
+    performLibraryExerciseDelete(id);
+    return;
+  }
+  libraryDeletePendingId = id;
+  const parts = [];
+  if (usage.blockCount) parts.push(`${usage.blockCount} sted${usage.blockCount === 1 ? '' : 'er'} i programmer`);
+  if (usage.weightLogCount) parts.push(`${usage.weightLogCount} loggede vægt${usage.weightLogCount === 1 ? '' : 'e'}`);
+  document.getElementById('library-delete-conflict-summary').textContent =
+    `Denne øvelse bruges i ${parts.join(' og ')}, hos: ${usage.clientNames.join(', ')}. ` +
+    `Sletter du den direkte, forsvinder den fra de programmer OG al loggede vægt-historik slettes permanent. ` +
+    `Vælg i stedet en erstatning for at flytte alt det eksisterende over dertil.`;
+  document.getElementById('library-delete-conflict-picker').style.display = 'none';
+  document.getElementById('library-delete-conflict-actions').style.display = 'flex';
+  document.getElementById('modal-library-delete-conflict').classList.add('open');
+}
+
+function performLibraryExerciseDelete(id) {
   DATA.exerciseLibrary = DATA.exerciseLibrary.filter(e => e.id !== id);
   DATA.clients.forEach(c => {
     (c.programs || []).forEach(p => {
@@ -6562,13 +6628,81 @@ function deleteLibraryExercise(id) {
         if (b.type === 'exercise' && b.libraryId === id) pendingDeletes.programBlocks.add(b.id);
       });
       p.blocks = (p.blocks || []).filter(b => !(b.type === 'exercise' && b.libraryId === id));
+      delete (p.weightLogs || {})[String(id)];
     });
+    delete (c.exercisePhotos || {})[String(id)];
   });
   pendingDeletes.exerciseLibrary.add(id);
   save();
   closeModal('modal-library-editor');
+  closeModal('modal-library-delete-conflict');
   refreshAllLibraryViews();
   showToast('Øvelse slettet');
+}
+
+function confirmDeleteLibraryExerciseAnyway() {
+  if (libraryDeletePendingId == null) return;
+  if (!confirm('Sikker? Dette fjerner øvelsen fra alle programmer der bruger den, og sletter al tilhørende vægt-historik permanent.')) return;
+  performLibraryExerciseDelete(libraryDeletePendingId);
+  libraryDeletePendingId = null;
+}
+
+function showLibraryReplacementPicker() {
+  document.getElementById('library-delete-conflict-picker').style.display = 'block';
+  document.getElementById('library-delete-conflict-actions').style.display = 'none';
+  document.getElementById('library-delete-replacement-search').value = '';
+  renderLibraryReplacementList();
+}
+
+function renderLibraryReplacementList() {
+  const q = document.getElementById('library-delete-replacement-search').value.trim().toLowerCase();
+  const list = DATA.exerciseLibrary
+    .filter(e => e.id !== libraryDeletePendingId)
+    .filter(e => !q || e.name.toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const el = document.getElementById('library-delete-replacement-list');
+  if (!list.length) { el.innerHTML = '<div class="empty" style="padding:16px 0"><p>Ingen øvelser matcher</p></div>'; return; }
+  el.innerHTML = list.map(e => `
+    <div class="picker-item" style="cursor:pointer" onclick="reassignLibraryExerciseAndDelete(${e.id})">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:600">${escapeHtml(e.name)}</div>
+        <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:.05em">${escapeHtml(e.category || 'Andet')}</div>
+      </div>
+    </div>`).join('');
+}
+
+// Flytter ALT der pegede på den gamle øvelse (program-blokke, vægt-log,
+// klient-specifikke referencebilleder) over til erstatningen, FØR den gamle
+// øvelse slettes — samme mønster som den manuelle Hangs→Dead Hang-omlægning
+// (2026-09-10), nu indbygget i UI'en i stedet for at kræve direkte SQL.
+function reassignLibraryExerciseAndDelete(newId) {
+  const oldId = libraryDeletePendingId;
+  if (oldId == null) return;
+  const newEx = DATA.exerciseLibrary.find(e => e.id === newId);
+  if (!newEx) return;
+  if (!confirm(`Flyt al brug til "${newEx.name}", og slet den gamle øvelse?`)) return;
+  DATA.clients.forEach(c => {
+    (c.programs || []).forEach(p => {
+      (p.blocks || []).forEach(b => {
+        if (b.type === 'exercise' && b.libraryId === oldId) b.libraryId = newId;
+      });
+      const oldLogs = (p.weightLogs || {})[String(oldId)];
+      if (oldLogs && oldLogs.length) {
+        p.weightLogs = p.weightLogs || {};
+        p.weightLogs[String(newId)] = [...(p.weightLogs[String(newId)] || []), ...oldLogs].sort((a, b) => a.date.localeCompare(b.date));
+        delete p.weightLogs[String(oldId)];
+      }
+    });
+    const oldPhoto = (c.exercisePhotos || {})[String(oldId)];
+    if (oldPhoto) {
+      c.exercisePhotos = c.exercisePhotos || {};
+      if (!c.exercisePhotos[String(newId)]) c.exercisePhotos[String(newId)] = oldPhoto;
+      delete c.exercisePhotos[String(oldId)];
+    }
+  });
+  performLibraryExerciseDelete(oldId);
+  libraryDeletePendingId = null;
+  showToast(`Flyttet til "${newEx.name}" og gammel øvelse slettet`);
 }
 
 // Refreshes every currently-visible screen that could be showing library data
