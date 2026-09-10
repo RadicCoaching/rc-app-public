@@ -1257,7 +1257,8 @@ body::before{
   <div class="modal">
     <div class="modal-title" id="ex-detail-name" style="font-size:26px"></div>
     <div id="ex-detail-client-label" style="font-size:13px;color:var(--accent);font-weight:700;margin-bottom:2px"></div>
-    <div class="card-sub" id="ex-detail-setsreps" style="margin-bottom:14px;font-size:16px"></div>
+    <div class="card-sub" id="ex-detail-setsreps" style="margin-bottom:2px;font-size:16px"></div>
+    <div id="ex-detail-editsetsreps-wrap" style="margin-bottom:14px"></div>
     <div id="ex-detail-image-wrap" style="margin-bottom:10px"></div>
     <div class="field">
       <label>Foto af maskinen på dit center (valgfrit)</label>
@@ -1654,6 +1655,7 @@ function loadData() {
         if (c.features.gpsTraining === undefined) c.features.gpsTraining = false;
         if (c.features.tanitaScan === undefined) c.features.tanitaScan = false;
         if (c.features.mealsLog === undefined) c.features.mealsLog = false;
+        if (c.features.editSetsReps === undefined) c.features.editSetsReps = false;
         if (c.focusEnabled === undefined) c.focusEnabled = false;
         if (c.focusOverall === undefined) c.focusOverall = '';
         if (c.focusCurrent === undefined) c.focusCurrent = '';
@@ -1996,6 +1998,7 @@ async function pushToSupabase() {
         feature_gps_training: !!(c.features && c.features.gpsTraining),
         feature_tanita_scan: !!(c.features && c.features.tanitaScan),
         feature_meals: !!(c.features && c.features.mealsLog),
+        feature_edit_sets_reps: !!(c.features && c.features.editSetsReps),
         training_goals: c.trainingGoals || [],
         feature_dual_training_goals: !!c.dualGoalsEnabled,
         training_goal_sets: c.trainingGoalSets || [],
@@ -2049,7 +2052,7 @@ async function pushToSupabase() {
       (c.programs || []).forEach((p, pi) => {
         allPrograms.push({ id: p.id, client_id: c.id, name: p.name, focus: p.focus || null, sort_order: p.sortOrder != null ? p.sortOrder : pi });
         (p.blocks || []).forEach((b, bi) => {
-          allBlocks.push({ id: b.id, program_id: p.id, type: b.type, text: b.text || null, library_id: b.libraryId || null, sets_reps: b.setsReps || null, sets: b.sets != null ? b.sets : null, reps: b.reps != null ? b.reps : null, reps_range_text: b.repsRangeText || null, ss: b.ss || null, sort_order: b.sortOrder != null ? b.sortOrder : bi, note: b.note || null });
+          allBlocks.push({ id: b.id, program_id: p.id, type: b.type, text: b.text || null, library_id: b.libraryId || null, sets_reps: b.setsReps || null, sets: b.sets != null ? b.sets : null, reps: b.reps != null ? b.reps : null, reps_range_text: b.repsRangeText || null, ss: b.ss || null, sort_order: b.sortOrder != null ? b.sortOrder : bi, note: b.note || null, edited_by_client: !!b.editedByClient });
         });
       });
     });
@@ -2441,7 +2444,7 @@ async function refreshFromSupabase() {
     const blocksByProgram = {};
     (blocksRes.data || []).sort((a, b) => a.sort_order - b.sort_order).forEach(b => {
       (blocksByProgram[b.program_id] = blocksByProgram[b.program_id] || []).push({
-        id: b.id, type: b.type, text: b.text || undefined, libraryId: b.library_id || undefined, setsReps: b.sets_reps || undefined, sets: b.sets != null ? b.sets : undefined, reps: b.reps != null ? b.reps : undefined, repsRangeText: b.reps_range_text || undefined, ss: b.ss || undefined, note: b.note || undefined,
+        id: b.id, type: b.type, text: b.text || undefined, libraryId: b.library_id || undefined, setsReps: b.sets_reps || undefined, sets: b.sets != null ? b.sets : undefined, reps: b.reps != null ? b.reps : undefined, repsRangeText: b.reps_range_text || undefined, ss: b.ss || undefined, note: b.note || undefined, editedByClient: !!b.edited_by_client,
         // RETTET (2026-09-10, "rod i rækkefølgen"-3. gentagelse): sort_order fra
         // databasen bevares nu PÅ selve objektet. Se pushToSupabase()'s
         // programs+blocks-sektion for hvorfor dette var nødvendigt.
@@ -2505,7 +2508,8 @@ async function refreshFromSupabase() {
         multipleCheckins: !!c.feature_multiple_checkins,
         gpsTraining: !!c.feature_gps_training,
         tanitaScan: !!c.feature_tanita_scan,
-        mealsLog: !!c.feature_meals
+        mealsLog: !!c.feature_meals,
+        editSetsReps: !!c.feature_edit_sets_reps
       },
       notes: c.notes || '', autoReply: c.auto_reply || '',
       // Opstartsdato (2026-09-06, Rune: "jeg sætter ikke nogen ind som ikke
@@ -7023,6 +7027,7 @@ function renderDetailProgram(clientId) {
           <div style="min-width:0;flex:1;cursor:pointer" onclick="openExerciseDetail(${p.id}, ${b.libraryId}, ${clientId})">
             <div class="exercise-row-name">${escapeHtml(name)}${b.ss ? `<span class="ss-tag">${escapeHtml(b.ss)}</span>` : ''}</div>
             ${formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps) ? `<div class="exercise-row-sets">${escapeHtml(formatSetsReps(b.sets, b.reps, b.repsRangeText, b.setsReps))}</div>` : ''}
+            ${b.editedByClient ? `<div style="font-size:12px;color:var(--accent);margin-top:2px">✏️ Ændret af klient</div>` : ''}
           </div>
           ${moveBtns}
           <button class="note-icon-btn ${hasNote ? 'has-note' : ''}" title="${hasNote ? 'Se/redigér note' : 'Tilføj note'}" onclick="event.stopPropagation(); openExerciseNoteModal(${clientId}, ${p.id}, ${b.id})">
@@ -7435,7 +7440,10 @@ function saveProgram(clientId) {
   // det er det ene sted brugeren netop har bekræftet "sådan skal den se ud",
   // så det er sikkert at nummerere 0..N-1 her. Se pushToSupabase() for hvorfor
   // dette ikke længere sker (blindt, muligvis på forældet data) ved hver gem.
-  editingProgramBlocks.forEach((b, i) => { b.sortOrder = i; });
+  // Coachen har nu gennemgået/gemt hele programmet — samme "coach har taget
+  // den tilbage"-regel som rc-mobile: en evt. "✏️ Ændret af klient"-markering
+  // nulstilles ved coachens eget gem, uanset hvilken blok det gjaldt.
+  editingProgramBlocks.forEach((b, i) => { b.sortOrder = i; b.editedByClient = false; });
   if (editingProgramId === 'new') {
     client.programs.push({ id: Date.now(), name, focus, weightLogs: {}, blocks: editingProgramBlocks, sortOrder: (client.programs || []).length });
   } else {
@@ -7824,9 +7832,13 @@ function renderDetailSettings(clientId) {
         <button class="toggle ${client.features.tanitaScan ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'tanitaScan')"></button>
         <span class="toggle-label"><strong>Scan kropsanalyse (Tanita m.fl.)</strong> — kan selv foto-scanne og gemme kropsanalyse-værdier</span>
       </div>
-      <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
         <button class="toggle ${client.features.mealsLog ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'mealsLog')"></button>
         <span class="toggle-label"><strong>Kost-logning</strong> — kan logge måltider med billede/kcal-/proteinestimat</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+        <button class="toggle ${client.features.editSetsReps ? 'on' : ''}" onclick="toggleClientFeature(${clientId}, 'editSetsReps')"></button>
+        <span class="toggle-label"><strong>Klient kan selv ændre sæt/reps</strong> — retter kun sæt/reps på en øvelse, ikke resten af programmet</span>
       </div>
     </div>
     <div class="divider"></div>
@@ -7835,7 +7847,7 @@ function renderDetailSettings(clientId) {
 
 function toggleClientFeature(clientId, key) {
   const client = DATA.clients.find(c => c.id === clientId);
-  if (!client.features) client.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false, mealsLog: false };
+  if (!client.features) client.features = { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false, tanitaScan: false, mealsLog: false, editSetsReps: false };
   client.features[key] = !client.features[key];
   save();
   renderDetailSettings(clientId);
@@ -8988,10 +9000,11 @@ function openExerciseDetail(programId, libraryId, clientId) {
   // sets/reps (2026-09-04): huskes her så saveExerciseDetailWeight() kan
   // snapshotte dem på den nye weight_log-række og bruge dem til den
   // sæt/reps-differentierede rekord-sammenligning, uden at slå blokken op igen.
-  currentExerciseDetail = { programId, libraryId, clientId, sets: block ? block.sets : null, reps: block ? block.reps : null };
+  currentExerciseDetail = { programId, libraryId, clientId, blockId: block ? block.id : null, sets: block ? block.sets : null, reps: block ? block.reps : null };
   const ex = (DATA.exerciseLibrary || []).find(e => e.id === libraryId);
   document.getElementById('ex-detail-name').textContent = ex ? ex.name : '(slettet øvelse)';
   document.getElementById('ex-detail-setsreps').textContent = block ? (formatSetsReps(block.sets, block.reps, block.repsRangeText, block.setsReps) || '') : '';
+  renderExerciseDetailEditSetsReps(client, block, programId, libraryId);
   const clientLabelEl = document.getElementById('ex-detail-client-label');
   if (clientLabelEl) clientLabelEl.textContent = (currentUser === 'coach') ? client.name : '';
   document.getElementById('ex-detail-description').textContent = ex && ex.description ? ex.description : 'Ingen beskrivelse endnu.';
@@ -9006,6 +9019,60 @@ function openExerciseDetail(programId, libraryId, clientId) {
   document.getElementById('ex-detail-date-input').value = todayLocalStr();
   renderExerciseWeightHistory();
   document.getElementById('modal-exercise-detail').classList.add('open');
+}
+
+// Klient-redigerbare sæt/reps (2026-09-10, porteret fra rc-mobiles
+// EditBlockScreen(asClient)) — coachen slår funktionen til pr. klient
+// (client.features.editSetsReps ↔ Supabase clients.feature_edit_sets_reps).
+// Skriver DIREKTE til program_blocks (ikke via den generelle
+// DATA/save()-synk, som er coach-orienteret og ville bulk-upserte HELE
+// klientens program/blok-træ) — RLS-policyen program_blocks_client_edit_
+// sets_reps (allerede oprettet af rc-mobile, delt database) tillader kun
+// netop denne ene, snævre opdatering. Matcher samme "én blok, én ret"-
+// afgrænsning som mobilens asClient-editor.
+function renderExerciseDetailEditSetsReps(client, block, programId, libraryId) {
+  const wrap = document.getElementById('ex-detail-editsetsreps-wrap');
+  if (!wrap) return;
+  const canEdit = currentUser !== 'coach' && block && client.features && client.features.editSetsReps;
+  if (!canEdit) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<a href="#" style="font-size:13px;color:var(--accent)" onclick="event.preventDefault(); showExerciseDetailEditSetsRepsForm(${block.sets != null ? block.sets : 'null'}, ${block.reps != null ? block.reps : 'null'}, ${block.repsRangeText ? `'${escapeHtml(block.repsRangeText).replace(/'/g, "\\'")}'` : 'null'})">✏️ Rediger</a>`;
+}
+
+function showExerciseDetailEditSetsRepsForm(sets, reps, repsRangeText) {
+  const wrap = document.getElementById('ex-detail-editsetsreps-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="number" min="0" id="ex-detail-edit-sets" value="${sets != null ? sets : ''}" placeholder="Sæt" style="width:64px">
+    <span style="font-size:13px;color:var(--gray)">×</span>
+    <input type="number" min="0" id="ex-detail-edit-reps" value="${reps != null ? reps : ''}" placeholder="Reps" style="width:64px">
+    <input type="text" id="ex-detail-edit-repsrange" value="${repsRangeText != null ? escapeHtml(repsRangeText) : ''}" placeholder="Interval, fx 10-12 (valgfrit)" style="flex:1;min-width:120px">
+    <button class="btn btn-sm btn-primary" onclick="saveClientSetsReps()">Gem</button>
+  </div>`;
+}
+
+async function saveClientSetsReps() {
+  const { programId, libraryId, clientId, blockId } = currentExerciseDetail;
+  if (!blockId) return;
+  const setsVal = document.getElementById('ex-detail-edit-sets').value;
+  const repsVal = document.getElementById('ex-detail-edit-reps').value;
+  const rangeVal = document.getElementById('ex-detail-edit-repsrange').value.trim();
+  const sets = setsVal !== '' ? parseInt(setsVal, 10) : null;
+  const reps = repsVal !== '' ? parseInt(repsVal, 10) : null;
+  const { error } = await sb.from('program_blocks').update({
+    sets, reps, reps_range_text: rangeVal || null, edited_by_client: true
+  }).eq('id', blockId);
+  if (error) { showToast('⚠ Kunne ikke gemme: ' + error.message); return; }
+  const client = DATA.clients.find(c => c.id === clientId);
+  const program = client.programs.find(p => p.id === programId);
+  const block = (program.blocks || []).find(b => b.id === blockId);
+  if (block) {
+    block.sets = sets; block.reps = reps; block.repsRangeText = rangeVal || undefined; block.editedByClient = true;
+  }
+  currentExerciseDetail.sets = sets;
+  currentExerciseDetail.reps = reps;
+  document.getElementById('ex-detail-setsreps').textContent = formatSetsReps(sets, reps, rangeVal || null, block ? block.setsReps : null) || '';
+  renderExerciseDetailEditSetsReps(client, block, programId, libraryId);
+  showToast('Sæt/reps gemt ✅');
 }
 
 async function renderExercisePhoto(client, ex) {
