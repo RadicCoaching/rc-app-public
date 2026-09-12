@@ -9337,16 +9337,79 @@ function latestTanitaBodyFatPercent(tanitaScans) {
   return null;
 }
 
+// NY (2026-09-12, matcher rc-mobiles tanitaTrends.ts): explanation bæres nu
+// med pr. serie — AI-udtrækket (analyze-tanita-scan) har allerede en kort
+// forklaring pr. værdi, blot ikke vist noget sted på web før nu. Skrives
+// over ved hver scanning (ikke kun "første fundne"), så den ALTID ender med
+// den seneste scannings formulering, uanset om tanitaScans er sorteret
+// ældst- eller nyest-først hos den enkelte kaldested.
 function extractTanitaValueSeries(tanitaScans) {
   const byKey = new Map();
   (tanitaScans || []).forEach(scan => {
     (scan.values || []).forEach(v => {
       if (typeof v.value !== 'number') return;
-      if (!byKey.has(v.key)) byKey.set(v.key, { key: v.key, label: v.label, unit: v.unit, points: [] });
-      byKey.get(v.key).points.push({ date: scan.date, value: v.value });
+      if (!byKey.has(v.key)) byKey.set(v.key, { key: v.key, label: v.label, unit: v.unit, explanation: null, points: [] });
+      const entry = byKey.get(v.key);
+      entry.points.push({ date: scan.date, value: v.value });
+      if (v.explanation) entry.explanation = v.explanation;
     });
   });
   return [...byKey.values()];
+}
+
+// Advarsler/noter om markante Tanita-værdier/-ændringer (Rune, 2026-09-12,
+// porteret fra rc-mobiles src/lib/tanitaFlags.ts — se dens CHANGELOG-entry
+// for hvorfor grænserne er sat som de er). Ren funktion, ingen
+// database-adgang. "kun til mig selv, ingen klienter bruger web længere"
+// (Rune) — vises derfor altid her, ingen show_tanita_flags-togglegating på
+// web (den styrer stadig klient-visning på mobil).
+function findTanitaVal(values, key) {
+  const v = (values || []).find(x => x.key === key);
+  if (!v) return null;
+  const num = typeof v.value === 'number' ? v.value : parseFloat(v.value);
+  return isNaN(num) ? null : num;
+}
+
+function computeTanitaFlags(latest, previous, clientAgeYears) {
+  const flags = [];
+
+  const visceral = findTanitaVal(latest, 'visceral_fat_rating');
+  if (visceral != null && visceral >= 13) {
+    flags.push({ label: 'Visceralt fedt-niveau', message: `${visceral} ligger over Tanitas normalområde (1-12) — fedt omkring de indre organer, ikke det man kan knibe i. Kan være værd at tale om kost/aktivitetsniveau.` });
+  }
+
+  const metabolicAge = findTanitaVal(latest, 'metabolic_age');
+  if (metabolicAge != null && clientAgeYears != null && metabolicAge - clientAgeYears >= 5) {
+    flags.push({ label: 'Metabolisk alder', message: `${metabolicAge} år — ${Math.round(metabolicAge - clientAgeYears)} år over den faktiske alder. Kan hænge sammen med muskelmasse, aktivitetsniveau eller stofskifte.` });
+  }
+
+  const waterPct = findTanitaVal(latest, 'total_body_water_percent');
+  if (waterPct != null && waterPct < 45) {
+    flags.push({ label: 'Kropsvand-procent', message: `${waterPct}% er lavere end det typiske niveau. Kan skyldes for lidt væske op til scanningen, ikke nødvendigvis en generel tendens — værd at holde øje med over flere scanninger.` });
+  }
+
+  if (previous) {
+    const prevVisceral = findTanitaVal(previous, 'visceral_fat_rating');
+    if (visceral != null && prevVisceral != null && visceral - prevVisceral >= 2) {
+      flags.push({ label: 'Visceralt fedt er steget', message: `Steget fra ${prevVisceral} til ${visceral} siden sidste scanning.` });
+    }
+    const muscle = findTanitaVal(latest, 'muscle_mass_kg');
+    const prevMuscle = findTanitaVal(previous, 'muscle_mass_kg');
+    if (muscle != null && prevMuscle != null && prevMuscle - muscle >= 1) {
+      flags.push({ label: 'Muskelmasse er faldet', message: `Faldet ${(prevMuscle - muscle).toFixed(1)} kg siden sidste scanning — kan skyldes ændret træningsmængde, kost, eller naturlig måle-variation.` });
+    }
+    const fatMass = findTanitaVal(latest, 'fat_mass_kg');
+    const prevFatMass = findTanitaVal(previous, 'fat_mass_kg');
+    if (fatMass != null && prevFatMass != null && fatMass - prevFatMass >= 1) {
+      flags.push({ label: 'Fedtmasse er steget', message: `Steget ${(fatMass - prevFatMass).toFixed(1)} kg siden sidste scanning.` });
+    }
+    const prevWaterPct = findTanitaVal(previous, 'total_body_water_percent');
+    if (waterPct != null && prevWaterPct != null && prevWaterPct - waterPct >= 5) {
+      flags.push({ label: 'Kropsvand er faldet', message: `Faldet ${(prevWaterPct - waterPct).toFixed(1)} procentpoint siden sidste scanning — tjek evt. hydrering op til scanningen.` });
+    }
+  }
+
+  return flags;
 }
 
 // ══════════════════════════════════════
@@ -9446,12 +9509,36 @@ function renderProgressKrop(clientId, panelId, showForm, stats) {
   // udviklingskurve eller at man på anden måde kan se om der kommer mere
   // eller mindre muskel masse osv" — kun værdier der går igen (mindst to
   // scanninger) får en graf, uanset hvilken Tanita-model der bruges.
+  // Advarsler om markante værdier/ændringer (2026-09-12) — vises altid her
+  // ("kun til mig selv, ingen klienter bruger web længere"), ingen
+  // toggle-gating som på mobil. tanitaScans er ældst-først (se
+  // getTanitaScansForClient), så seneste/forrige er de to sidste elementer.
+  if (tanitaScans && tanitaScans.length) {
+    const latestScan = tanitaScans[tanitaScans.length - 1];
+    const previousScan = tanitaScans.length > 1 ? tanitaScans[tanitaScans.length - 2] : null;
+    const clientAge = client.birthYear ? (new Date().getFullYear() - client.birthYear) : null;
+    const flags = computeTanitaFlags(latestScan.values, previousScan ? previousScan.values : null, clientAge);
+    if (flags.length) {
+      shownAnything = true;
+      html += `<div class="section-head">Værd at bemærke</div>`;
+      flags.forEach(f => {
+        html += `<div class="card" style="margin-bottom:8px;border-left:3px solid var(--warn, #F0A500)">
+          <div style="font-weight:700;color:var(--warn, #F0A500);margin-bottom:4px">${escapeHtml(f.label)}</div>
+          <div style="font-size:13px;line-height:1.4">${escapeHtml(f.message)}</div>
+        </div>`;
+      });
+    }
+  }
+
   const tanitaSeries = extractTanitaValueSeries(tanitaScans);
   if (tanitaSeries.length) {
     shownAnything = true;
     html += `<div class="section-head">Kropssammensætning (Tanita-scan)</div>`;
     tanitaSeries.forEach(s => {
-      html += `<div class="card" style="margin-bottom:10px"><div class="card-title" style="margin-bottom:4px">${escapeHtml(s.label)}</div>${svgLineChart(s.points, { color: CHART_COLORS.blue, unitSuffix: s.unit ? ' ' + s.unit : '' })}</div>`;
+      const infoIcon = s.explanation
+        ? ` <span title="${escapeHtml(s.explanation)}" style="cursor:help;color:var(--accent-blue,${CHART_COLORS.blue});font-size:12px">ⓘ</span>`
+        : '';
+      html += `<div class="card" style="margin-bottom:10px"><div class="card-title" style="margin-bottom:4px">${escapeHtml(s.label)}${infoIcon}</div>${svgLineChart(s.points, { color: CHART_COLORS.blue, unitSuffix: s.unit ? ' ' + s.unit : '' })}</div>`;
     });
   }
 
