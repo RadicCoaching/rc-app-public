@@ -9263,13 +9263,25 @@ function svgLineChart(points, opts) {
   const linePts = points.map((p, i) => `${pad + i * stepX},${scaleY(Number(p.value))}`).join(' ');
   const dots = points.map((p, i) => `<circle cx="${pad + i * stepX}" cy="${scaleY(Number(p.value))}" r="3.5" fill="${opts.color}"/>`).join('');
   const lastVal = values[n - 1];
+  // Rune (2026-09-12): "mangler også at kunne se tabt mængde muskelmasse
+  // mellem 2 eller flere målinger... tilgængeligt, eller med et tryk på
+  // graf, måling eller andet" — ændring fra FØRSTE til SENESTE måling i
+  // den viste periode, altid synlig under selve kurven. Samme beregning
+  // som TrendLineChart.tsx på mobil.
+  let deltaHtml = '';
+  if (n > 1) {
+    const delta = Math.round((lastVal - values[0]) * 10) / 10;
+    const sign = delta > 0 ? '+' : delta < 0 ? '−' : '±';
+    deltaHtml = `<div style="text-align:right;font-size:12px;font-weight:700;color:${CHART_COLORS.gray};margin-top:2px">Ændring i perioden: ${sign}${Math.abs(delta)}${opts.unitSuffix}</div>`;
+  }
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block;overflow:visible">
     <polyline points="${linePts}" fill="none" stroke="${opts.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}
     <text x="${pad}" y="${h - 6}" font-size="10" fill="${CHART_COLORS.gray}" font-family="Inter">${fmtShortDate(points[0].date)}</text>
     <text x="${w - pad}" y="${h - 6}" font-size="10" fill="${CHART_COLORS.gray}" font-family="Inter" text-anchor="end">${fmtShortDate(points[n - 1].date)}</text>
   </svg>
-  <div style="text-align:right;font-family:'Inter',sans-serif;font-weight:900;font-size:20px;letter-spacing:-.02em;color:${opts.color};margin-top:4px">${lastVal}${opts.unitSuffix}</div>`;
+  <div style="text-align:right;font-family:'Inter',sans-serif;font-weight:900;font-size:20px;letter-spacing:-.02em;color:${opts.color};margin-top:4px">${lastVal}${opts.unitSuffix}</div>
+  ${deltaHtml}`;
 }
 
 function svgMultiLineChart(seriesArray, opts) {
