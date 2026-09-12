@@ -9351,7 +9351,7 @@ function extractTanitaValueSeries(tanitaScans) {
       if (!byKey.has(v.key)) byKey.set(v.key, { key: v.key, label: v.label, unit: v.unit, explanation: null, points: [] });
       const entry = byKey.get(v.key);
       entry.points.push({ date: scan.date, value: v.value });
-      if (v.explanation) entry.explanation = v.explanation;
+      entry.explanation = getTanitaExplanation(v.key, v.explanation);
     });
   });
   return [...byKey.values()];
@@ -9363,6 +9363,41 @@ function extractTanitaValueSeries(tanitaScans) {
 // database-adgang. "kun til mig selv, ingen klienter bruger web længere"
 // (Rune) — vises derfor altid her, ingen show_tanita_flags-togglegating på
 // web (den styrer stadig klient-visning på mobil).
+// Normalområder/referencer pr. Tanita-felt (Rune, 2026-09-12: "skal den
+// være lav eller høj? Hvad er normal området?") — porteret fra rc-mobiles
+// src/lib/tanitaReference.ts (se dens kommentar for hvorfor dette er ÉN
+// fast, gennemgået kilde i stedet for AI-genereret pr. scanning). Samme
+// tekst begge steder, for konsistens.
+function tanitaSideText(template, side) { return template.replace('{side}', side); }
+const TANITA_REFERENCE = {
+  body_fat_percent: 'Andelen af din kropsvægt der består af fedt. Sunde niveauer varierer med køn, alder og mål — ofte angivet til ca. 10-20 % for mænd og 18-28 % for kvinder, men det er individuelt, ikke et fast facit.',
+  fat_mass_kg: 'Den samlede mængde fedt i kroppen, målt i kg. Intet fast normaltal i sig selv — mest brugbart som udvikling over tid, sammen med fedtprocenten.',
+  muscle_mass_kg: 'Den samlede mængde muskler i kroppen. Ingen fast norm — afhænger af højde, køn og træningsbaggrund. Stigende muskelmasse over tid er generelt positivt for styrke og stofskifte.',
+  bone_mass_kg: 'Et estimat af knoglevævets vægt — IKKE en knogletæthedsscanning som DEXA, kun vejledende. Et ret stabilt tal; mindre udsving mellem scanninger er normal måleusikkerhed, ikke en reel ændring.',
+  metabolic_age: 'Din stofskiftealder sammenlignet med gennemsnittet for din alder, baseret på dit BMR. Ideelt på niveau med eller under din faktiske alder — markant højere kan hænge sammen med muskelmasse eller aktivitetsniveau.',
+  total_body_water_kg: 'Den samlede mængde vand i kroppen, målt i kg. Følger typisk kropsstørrelsen — mest brugbart som udvikling over tid, ikke som et enkeltstående tal.',
+  total_body_water_percent: 'Andelen af kropsvægten der er vand. Typisk normalområde: ca. 50-65 % for mænd, 45-60 % for kvinder (kvinder har naturligt mere fedtvæv, som indeholder mindre vand end muskelvæv).',
+  ecw_kg: 'Mængden af vand uden for kroppens celler (fx i blodbane og mellemrum mellem celler). Mest sigende sammen med vandet INDE i cellerne (ICW) — se ECW/TBW-forholdet nedenfor for den bedste tolkning.',
+  icw_kg: 'Mængden af vand inde i kroppens celler — hænger tæt sammen med muskelmasse, da muskelceller indeholder meget vand.',
+  ecw_tbw_ratio: 'Forholdet mellem vand uden for cellerne og kroppens totale vand — et mål for væskebalance/cellekvalitet. Typisk normalområde: ca. 0,36-0,39 (36-39 %). Lavere, inden for normalområdet, er typisk bedre; mærkbart højere kan hænge sammen med væskeophobning eller lavere cellekvalitet, og er værd at følge over tid frem for at dømme på ét enkelt tal.',
+  bmr_kj: 'Den mængde energi din krop bruger i hvile for at holde dig i live, målt i kilojoule. Afhænger af størrelse, muskelmasse, alder og køn — dit personlige udgangspunkt for det samlede energiforbrug, ikke et "normalt" tal i sig selv.',
+  bmr_kcal: 'Den mængde energi din krop bruger i hvile for at holde dig i live, målt i kalorier. Afhænger af størrelse, muskelmasse, alder og køn — dit personlige udgangspunkt for det samlede energiforbrug (TDEE), ikke et "normalt" tal i sig selv.',
+  visceral_fat_rating: 'Et mål for mængden af fedt omkring dine indre organer — ikke det man kan knibe i under huden. Tanitas skala: 1-12 er normalområdet, 13 og derover regnes for forhøjet.',
+  trunk_muscle_kg: 'Mængden af muskler i din krops midte (torso). Ingen fast norm — mest brugbart som udvikling over tid og til at sammenligne med arme/ben.',
+  left_arm_muscle_kg: tanitaSideText('Mængden af muskler i din {side} arm. Sammenlign med den anden arm — de fleste har en naturlig dominant side, så lidt forskel er normalt; en forskel på over ca. 10 % kan være værd at holde øje med.', 'venstre'),
+  right_arm_muscle_kg: tanitaSideText('Mængden af muskler i din {side} arm. Sammenlign med den anden arm — de fleste har en naturlig dominant side, så lidt forskel er normalt; en forskel på over ca. 10 % kan være værd at holde øje med.', 'højre'),
+  left_leg_muscle_kg: tanitaSideText('Mængden af muskler i dit {side} ben. Sammenlign med det andet ben — lidt forskel er normalt, en forskel på over ca. 10 % kan være værd at holde øje med.', 'venstre'),
+  right_leg_muscle_kg: tanitaSideText('Mængden af muskler i dit {side} ben. Sammenlign med det andet ben — lidt forskel er normalt, en forskel på over ca. 10 % kan være værd at holde øje med.', 'højre'),
+  trunk_fat_percent: 'Fedtprocenten i din krops midte (torso). Intet fast normaltal i sig selv — mest brugbart sammen med den samlede fedtprocent, til at se hvor kroppen typisk lagrer fedt.',
+  left_arm_fat_percent: tanitaSideText('Fedtprocenten i din {side} arm. Intet fast normaltal i sig selv — mest brugbart sammenlignet med din samlede fedtprocent og den anden arm, for at se fordelingen.', 'venstre'),
+  right_arm_fat_percent: tanitaSideText('Fedtprocenten i din {side} arm. Intet fast normaltal i sig selv — mest brugbart sammenlignet med din samlede fedtprocent og den anden arm, for at se fordelingen.', 'højre'),
+  left_leg_fat_percent: tanitaSideText('Fedtprocenten i dit {side} ben. Intet fast normaltal i sig selv — mest brugbart sammenlignet med din samlede fedtprocent og det andet ben, for at se fordelingen.', 'venstre'),
+  right_leg_fat_percent: tanitaSideText('Fedtprocenten i dit {side} ben. Intet fast normaltal i sig selv — mest brugbart sammenlignet med din samlede fedtprocent og det andet ben, for at se fordelingen.', 'højre'),
+};
+function getTanitaExplanation(key, aiExplanation) {
+  return TANITA_REFERENCE[key] || aiExplanation || null;
+}
+
 function findTanitaVal(values, key) {
   const v = (values || []).find(x => x.key === key);
   if (!v) return null;
@@ -11327,7 +11362,7 @@ function renderTanitaResult(result) {
   (result.values || []).forEach(v => {
     rows.push(`<div style="padding:8px 0;border-top:1px solid var(--border)">
       <div style="display:flex;justify-content:space-between"><strong>${escapeHtml(v.label)}</strong><span>${escapeHtml(String(v.value))}${v.unit ? ' ' + escapeHtml(v.unit) : ''}</span></div>
-      <div class="card-sub" style="margin-top:2px">${escapeHtml(v.explanation || '')}</div>
+      <div class="card-sub" style="margin-top:2px">${escapeHtml(getTanitaExplanation(v.key, v.explanation) || '')}</div>
     </div>`);
   });
   const empty = result.weight_kg == null && result.bmi == null && (!result.values || !result.values.length);
