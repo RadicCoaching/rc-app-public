@@ -2050,7 +2050,7 @@ async function pushToSupabase() {
     const allPrograms = [], allBlocks = [];
     DATA.clients.forEach(c => {
       (c.programs || []).forEach((p, pi) => {
-        allPrograms.push({ id: p.id, client_id: c.id, name: p.name, focus: p.focus || null, sort_order: p.sortOrder != null ? p.sortOrder : pi });
+        allPrograms.push({ id: p.id, client_id: c.id, name: p.name, focus: p.focus || null, training_type: p.trainingType || 'Styrke', sort_order: p.sortOrder != null ? p.sortOrder : pi });
         (p.blocks || []).forEach((b, bi) => {
           allBlocks.push({ id: b.id, program_id: p.id, type: b.type, text: b.text || null, library_id: b.libraryId || null, sets_reps: b.setsReps || null, sets: b.sets != null ? b.sets : null, reps: b.reps != null ? b.reps : null, reps_range_text: b.repsRangeText || null, ss: b.ss || null, sort_order: b.sortOrder != null ? b.sortOrder : bi, note: b.note || null, edited_by_client: !!b.editedByClient });
         });
@@ -2481,7 +2481,7 @@ async function refreshFromSupabase() {
     const programsByClient = {};
     (progRes.data || []).sort((a, b) => a.sort_order - b.sort_order).forEach(p => {
       (programsByClient[p.client_id] = programsByClient[p.client_id] || []).push({
-        id: p.id, name: p.name, focus: p.focus || '', blocks: blocksByProgram[p.id] || [], weightLogs: weightLogsByProgram[p.id] || {},
+        id: p.id, name: p.name, focus: p.focus || '', trainingType: p.training_type || 'Styrke', blocks: blocksByProgram[p.id] || [], weightLogs: weightLogsByProgram[p.id] || {},
         sortOrder: p.sort_order
       });
     });
@@ -6954,7 +6954,7 @@ function renderDetailProgram(clientId) {
   if (editingProgramId !== null) {
     blockEditorIds = PROGRAM_BLOCK_EDITOR_IDS;
     const isNew = editingProgramId === 'new';
-    const program = isNew ? { name: '', focus: '' } : client.programs.find(p => p.id === editingProgramId);
+    const program = isNew ? { name: '', focus: '', trainingType: 'Styrke' } : client.programs.find(p => p.id === editingProgramId);
     el.innerHTML = `
       <div class="field">
         <label>Navn på program</label>
@@ -6963,6 +6963,12 @@ function renderDetailProgram(clientId) {
       <div class="field">
         <label>Fokus / mål (bruges til at gruppere klientens programmer, og klienten ser det selv)</label>
         <input type="text" id="prog-focus-${clientId}" value="${escapeHtml(program.focus || '')}" placeholder="fx Pullup, Vægttab, Ben/Core">
+      </div>
+      <div class="field">
+        <label>Træningstype (bruges til det ugentlige træningsmål, når klienten trykker "Fuldført")</label>
+        <select id="prog-type-${clientId}">
+          ${(DATA.trainingTypes || []).map(t => `<option value="${escapeHtml(t)}" ${t === (program.trainingType || 'Styrke') ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+        </select>
       </div>
       ${isNew && DATA.programTemplates.length ? `
       <div style="margin-bottom:16px">
@@ -7436,6 +7442,8 @@ function saveProgram(clientId) {
   const name = document.getElementById('prog-name-' + clientId).value.trim() || 'Program';
   const focusEl = document.getElementById('prog-focus-' + clientId);
   const focus = focusEl ? focusEl.value.trim() : '';
+  const typeEl = document.getElementById('prog-type-' + clientId);
+  const trainingType = typeEl ? typeEl.value : 'Styrke';
   // sortOrder tildeles her, ud fra editingProgramBlocks' ENDELIGE rækkefølge —
   // det er det ene sted brugeren netop har bekræftet "sådan skal den se ud",
   // så det er sikkert at nummerere 0..N-1 her. Se pushToSupabase() for hvorfor
@@ -7445,7 +7453,7 @@ function saveProgram(clientId) {
   // nulstilles ved coachens eget gem, uanset hvilken blok det gjaldt.
   editingProgramBlocks.forEach((b, i) => { b.sortOrder = i; b.editedByClient = false; });
   if (editingProgramId === 'new') {
-    client.programs.push({ id: Date.now(), name, focus, weightLogs: {}, blocks: editingProgramBlocks, sortOrder: (client.programs || []).length });
+    client.programs.push({ id: Date.now(), name, focus, trainingType, weightLogs: {}, blocks: editingProgramBlocks, sortOrder: (client.programs || []).length });
   } else {
     const program = client.programs.find(p => p.id === editingProgramId);
     const oldIds = new Set((program.blocks || []).map(b => b.id));
@@ -7453,6 +7461,7 @@ function saveProgram(clientId) {
     oldIds.forEach(id => { if (!newIds.has(id)) pendingDeletes.programBlocks.add(id); });
     program.name = name;
     program.focus = focus;
+    program.trainingType = trainingType;
     program.blocks = editingProgramBlocks;
   }
   editingProgramId = null;
