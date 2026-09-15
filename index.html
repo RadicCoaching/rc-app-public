@@ -2679,7 +2679,7 @@ setInterval(pollForUpdates, 45000);
 let knownAlertState = { checkinIds: new Set(), bookingIds: new Set(), goalKeys: new Set(), initialized: false };
 
 function snapshotAlertState() {
-  const checkinIds = new Set((DATA.checkins || []).filter(ci => (!ci.reply || ci.autoReplied) && !ci.hiddenForCoach).map(ci => ci.id));
+  const checkinIds = new Set((DATA.checkins || []).filter(ci => (!ci.reply || ci.autoReplied) && !ci.hiddenForCoach && !ci.coachSeen).map(ci => ci.id));
   const bookingIds = new Set(getCoachBookingNotifications().map(s => s.id));
   const goalKeys = new Set(getCoachGoalNotifications().map(n => n.clientId + '_' + n.key));
   return { checkinIds, bookingIds, goalKeys };
@@ -3832,7 +3832,7 @@ function renderCoachDashboard() {
   }
 
   // Pending
-  const pending = DATA.checkins.filter(ci => (!ci.reply || ci.autoReplied) && !ci.hiddenForCoach);
+  const pending = DATA.checkins.filter(ci => (!ci.reply || ci.autoReplied) && !ci.hiddenForCoach && !ci.coachSeen);
   const pendingEl = document.getElementById('coach-pending-list');
   updateBadges(pending.length);
   if (!pending.length) {
@@ -3871,7 +3871,7 @@ function getLastCheckin(clientId) {
 }
 
 function getPendingCheckins(clientId) {
-  return DATA.checkins.filter(c => c.clientId === clientId && (!c.reply || c.autoReplied) && !c.hiddenForCoach);
+  return DATA.checkins.filter(c => c.clientId === clientId && (!c.reply || c.autoReplied) && !c.hiddenForCoach && !c.coachSeen);
 }
 
 const NO_CONTACT_WARNING_DAYS = 10;
@@ -3965,9 +3965,12 @@ function renderCheckinCard(ci, client, showReply = false) {
       <div class="checkin-reply"><div class="reply-lbl">Rune</div>${escapeHtml(ci.reply || '')}</div>
     </div>`;
   }
+  const isUnansweredForBadges = (!ci.reply || ci.autoReplied);
   let statusHtml;
   if (ci.reply && !ci.autoReplied) {
     statusHtml = `<span class="tag" style="background:rgba(74,232,122,0.15);color:var(--good)">✓ Besvaret</span>`;
+  } else if (isUnansweredForBadges && ci.coachSeen) {
+    statusHtml = `<span class="tag" style="background:rgba(255,255,255,0.08);color:var(--gray)">👁 Set, intet svar</span>`;
   } else if (ci.reply && ci.autoReplied) {
     statusHtml = `<span class="tag" style="background:var(--accent-dim);color:var(--accent)">Auto-svaret</span>`;
   } else {
@@ -3982,6 +3985,7 @@ function renderCheckinCard(ci, client, showReply = false) {
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
         ${statusHtml}
+        ${isUnansweredForBadges && !ci.coachSeen ? `<button class="btn-icon" title="Marker som set — fjerner den fra 'Afventer svar' uden at skrive et svar" onclick="markCheckinSeenFromThread(${ci.id})">👁</button>` : ''}
         <button class="btn-icon" title="Fjern (kun fra din visning)" onclick="hideCheckinForCoach(${ci.id})">✕</button>
       </div>
     </div>
@@ -4015,6 +4019,26 @@ function saveTrainingReply(tId, inputEl) {
   if (t) { t.reply = text; save(); }
   if (currentDetailTab === 'history') renderDetailHistory(currentClientId);
   refreshInboxNotifications();
+}
+
+// Rune: "En besked der er skrevet til mig, skal jeg kunne sætte som 'set' så
+// den ikke afventer, hvis jeg ikke skal svare på den." Genbruger det
+// eksisterende coach_seen-felt (allerede brugt til at fjerne noter fra
+// indbakke-notifikationerne, se refreshInboxNotifications()) — men satte
+// hidtil KUN indbakken, ikke selve "Afventer"-status i tråden/dashboardet,
+// så beskeden blev ved med at stå som afventende der. Denne funktion sætter
+// coach_seen direkte fra selve check-in-kortet, og pending/getPendingCheckins
+// nedenfor respekterer nu samme felt, så begge steder stemmer overens.
+function markCheckinSeenFromThread(ciId) {
+  const ci = DATA.checkins.find(c => c.id === ciId);
+  if (!ci) return;
+  ci.coachSeen = true;
+  coachDirtyCheckinIds.add(ciId);
+  save();
+  renderCoachDashboard();
+  renderAllCheckins();
+  refreshInboxNotifications();
+  if (currentDetailTab === 'history') renderDetailHistory(currentClientId);
 }
 
 // Skjuler en besked KUN i coachens egen visning — klienten kan stadig se den fint.
@@ -4074,7 +4098,7 @@ function renderMessagesClientList(el) {
     const cis = DATA.checkins.filter(ci => ci.clientId === c.id && !ci.hiddenForCoach).sort((a,b) => b.date.localeCompare(a.date));
     const last = cis[0] || null;
     const pendingVideo = pendingVideoByClient[String(c.id)];
-    const pending = cis.filter(ci => !ci.reply || ci.autoReplied).length + (pendingVideo ? pendingVideo.count : 0);
+    const pending = cis.filter(ci => (!ci.reply || ci.autoReplied) && !ci.coachSeen).length + (pendingVideo ? pendingVideo.count : 0);
     return { client: c, cis, last, pending, pendingVideo };
   });
 
