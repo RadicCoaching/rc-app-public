@@ -1988,6 +1988,16 @@ async function pushToSupabase() {
   // section-wrapperen ovenfor) — resten synces stadig.
   await section('clients', async () => {
     if (DATA.clients.length) {
+      // SIKKERHEDSFIX (2026-09-16, Fund 4): 'notes' er nu KUN faktisk hentet
+      // for en coach-session (se refreshFromSupabase()) — for en klient-
+      // session er DATA.clients[].notes altid ''. Uden denne udeladelse ville
+      // en klients egen sync forsøge at nulstille ALLE klienters noter til
+      // tomt hver gang, og — fordi det IKKE er et af de felter
+      // enforce_client_vitals_only()-triggeren tillader klienter at ændre —
+      // reelt bare fejle med en synk-fejl hver gang en klient gemte noget som
+      // helst, selv sine egne vitals. Udeladt helt, samme mønster/begrundelse
+      // som pin/code_hash/setup_code nedenfor.
+      const isCoachSession = currentUser === 'coach';
       await sb.from('clients').upsert(DATA.clients.map(c => ({
         // pin/code_hash/setup_code er UDELADT bevidst — de styres udelukkende
         // via generate_client_setup_code-RPC'en (se generateClientSetupCode()),
@@ -2024,9 +2034,10 @@ async function pushToSupabase() {
         focus_enabled: !!c.focusEnabled,
         focus_overall: c.focusOverall || '',
         focus_current: c.focusCurrent || '',
-        notes: c.notes || '', auto_reply: c.autoReply || '',
+        auto_reply: c.autoReply || '',
         warmup: c.warmup || null,
-        data_retention_until: c.dataRetentionUntil || null
+        data_retention_until: c.dataRetentionUntil || null,
+        ...(isCoachSession ? { notes: c.notes || '' } : {})
       })));
     }
   });
@@ -2513,8 +2524,18 @@ async function refreshFromSupabase() {
       (photosByClient[ph.client_id] = photosByClient[ph.client_id] || {})[ph.library_id] = ph.image_url;
     });
 
+    // SIKKERHEDSFIX (2026-09-16, SIKKERHEDS_GENNEMGANG_2026-09-16.md, Fund 4):
+    // pin/codeHash/setupCode/notes blev tidligere kortlagt uændret for BÅDE
+    // coach- og klient-sessioner, og endte dermed i klientens egen browsers
+    // localStorage — klientens egen (hashede) kode, og Runes private noter
+    // om netop den klient. Kun coachen har reelt brug for disse felter.
+    const isCoachSession = currentUser === 'coach';
     const clients = clientsRes.data.map(c => ({
-      id: c.id, name: c.name, pin: c.pin, codeHash: c.code_hash, setupCode: c.setup_code, heightCm: c.height_cm, birthYear: c.birth_year,
+      id: c.id, name: c.name,
+      pin: isCoachSession ? c.pin : null,
+      codeHash: isCoachSession ? c.code_hash : null,
+      setupCode: isCoachSession ? c.setup_code : null,
+      heightCm: c.height_cm, birthYear: c.birth_year,
       birthMonth: c.birth_month || null, birthDay: c.birth_day || null, sex: c.sex, pal: c.pal,
       weightGoal: c.weight_goal || null,
       visibleStats: { weight: !!c.show_weight, bmi: !!c.show_bmi, bmr: !!c.show_bmr, kcal: !!c.show_kcal, weightGoal: !!c.show_weight_goal, sessionsLeft: !!c.show_sessions_left, distanceKm: !!c.show_distance_km },
@@ -2533,7 +2554,7 @@ async function refreshFromSupabase() {
         mealsLog: !!c.feature_meals,
         editSetsReps: !!c.feature_edit_sets_reps
       },
-      notes: c.notes || '', autoReply: c.auto_reply || '',
+      notes: isCoachSession ? (c.notes || '') : '', autoReply: c.auto_reply || '',
       // Opstartsdato (2026-09-06, Rune: "jeg sætter ikke nogen ind som ikke
       // er opstartet, så tidspunkt for oprettelse er også start tidspunktet")
       // — created_at fandtes allerede i databasen, men blev ikke vist noget
