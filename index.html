@@ -1948,12 +1948,24 @@ async function pushToSupabase() {
 
   await section('coach_status', async () => {
     await sb.from('coach_status').upsert({
-      id: 1, pin: DATA.coachPin, online: DATA.coachStatus.online, offline_msg: DATA.coachStatus.offlineMsg,
+      id: 1, online: DATA.coachStatus.online, offline_msg: DATA.coachStatus.offlineMsg,
       training_types: DATA.trainingTypes || [], celebration_photo: DATA.coachCelebrationPhoto || '',
       distance_logging_enabled: !!DATA.distanceLoggingEnabled, distance_types: DATA.distanceTypes || [],
       tanita_scan_monthly_limit: DATA.tanitaScanMonthlyLimit
     });
   });
+
+  // SIKKERHEDSFIX (2026-09-16, SIKKERHEDS_GENNEMGANG_2026-09-16.md, Fund 1):
+  // pin flyttet ud af coach_status (som enhver klient må SELECT'e) til
+  // coach_secrets (coach-only RLS). Kun coachen skal nogensinde skrive
+  // denne — en klient har ikke skriverettighed på coach_secrets, og
+  // DATA.coachPin er under alle omstændigheder ikke meningsfuldt for en
+  // klient-session.
+  if (currentUser === 'coach') {
+    await section('coach_secrets', async () => {
+      await sb.from('coach_secrets').upsert({ id: 1, pin: DATA.coachPin });
+    });
+  }
 
   // Kartotek — opdater/indsæt det der findes lokalt, slet kun eksplicit fjernede
   await section('exercise_library', async () => {
@@ -2393,8 +2405,18 @@ async function refreshFromSupabase() {
   // af DATA — det er det der har fået nyligt gemte vægte/rækkefølger til at forsvinde igen.
   await supabaseSyncChain;
   try {
-    const [coachRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes, tmplRes, scRes, ctRes, convRes, timeLogRes] = await Promise.all([
+    // SIKKERHEDSFIX (2026-09-16, SIKKERHEDS_GENNEMGANG_2026-09-16.md, Fund 1):
+    // pin hentes IKKE længere som del af coach_status's select('*') — den
+    // kørte for BÅDE coach og klient, og trak coachens login-kode ned i
+    // enhver klients browser. Hentes nu separat, kun når den indloggede
+    // rent faktisk er coachen (RLS på coach_secrets ville alligevel afvise
+    // en klients forsøg, men vi undgår at spørge overhovedet).
+    const coachSecretsPromise = (currentUser === 'coach')
+      ? sb.from('coach_secrets').select('pin').eq('id', 1).maybeSingle()
+      : Promise.resolve({ data: null });
+    const [coachRes, coachSecretsRes, libRes, clientsRes, progRes, blocksRes, wlRes, photosRes, bmRes, rlRes, tcRes, mlRes, ciRes, aptRes, bookingRes, tmplRes, scRes, ctRes, convRes, timeLogRes] = await Promise.all([
       sb.from('coach_status').select('*').eq('id', 1).maybeSingle(),
+      coachSecretsPromise,
       sb.from('exercise_library').select('*'),
       sb.from('clients').select('*'),
       sb.from('programs').select('*'),
@@ -2525,7 +2547,7 @@ async function refreshFromSupabase() {
     }));
 
     DATA = {
-      coachPin: (coachRes.data && coachRes.data.pin) || '1234',
+      coachPin: (coachSecretsRes.data && coachSecretsRes.data.pin) || '1234',
       coachStatus: { online: coachRes.data ? coachRes.data.online : true, offlineMsg: (coachRes.data && coachRes.data.offline_msg) || '' },
       trainingTypes: (coachRes.data && coachRes.data.training_types && coachRes.data.training_types.length) ? coachRes.data.training_types : ['Løb', 'Gåtur', 'Cykling', 'Spinning', 'Styrke', 'OCR', 'CrossFit', 'Andet'],
       coachCelebrationPhoto: (coachRes.data && coachRes.data.celebration_photo) || '',
