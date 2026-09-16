@@ -2671,6 +2671,17 @@ function rerenderCurrentView() {
 
 setInterval(pollForUpdates, 45000);
 
+// FORSLAG E (PROGRAM_ROD_UNDERSOEGELSE_2026-09-16.md): en fane der har
+// ligget i baggrunden kan have vilkårligt gammel data — browsere sætter
+// timere i bero i baggrundsfaner, så de 45 sekunder ovenfor reelt kan blive
+// til timer/dage. Henter friske data med det samme fanen bliver synlig
+// igen, i stedet for at vente på næste tilfældige 45-sek.-tjek. Gør IKKE
+// Fund 1 (den stille sletning ved "Gem") umulig alene — se Forslag A,
+// rettet samme dag — men indsnævrer det farlige tidsrum markant.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') pollForUpdates();
+});
+
 // ══════════════════════════════════════
 // LIVE-ALARMER — mens appen er ÅBEN (lyd + pop-up + vibration)
 // Sammenligner ved hvert 45-sek. tjek hvilke beskeder/bookinger/mål der er NYE siden
@@ -4821,15 +4832,20 @@ function coachCancelSlot(slotId) {
 
 // Den fælles, atomiske "gør ledig igen"-funktion — bruges både når coachen frigiver
 // og når en klient selv afbestiller.
+// SIKKERHEDSFIX (2026-09-16): note blev tidligere IKKE ryddet her — et
+// frigivet slot der oprindeligt kom fra en klient-navngivet kalender-
+// begivenhed (fx "RC Træning — Lorena Sandu") beholdt derfor navnet i
+// note-feltet, som vises råt til ALLE klienter under "Ledige tider". Se
+// CHANGELOG for detaljer. Samme rettelse i rc-mobile.
 async function releaseSlot(slotId) {
   if (sb) {
     try {
-      const { error } = await sb.from('booking_slots').update({ status: 'ledig', booked_by_client_id: null, booked_at: null }).eq('id', slotId);
+      const { error } = await sb.from('booking_slots').update({ status: 'ledig', booked_by_client_id: null, booked_at: null, note: null }).eq('id', slotId);
       if (error) { console.error('Kunne ikke frigive tid i Supabase', error); showToast('⚠ Kunne ikke frigive tiden i skyen: ' + (error.message || 'ukendt fejl')); }
     } catch (err) { console.error('Kunne ikke frigive tid i Supabase', err); }
   }
   const slot = (DATA.bookingSlots || []).find(s => s.id === slotId);
-  if (slot) { slot.status = 'ledig'; slot.bookedByClientId = null; slot.bookedAt = null; }
+  if (slot) { slot.status = 'ledig'; slot.bookedByClientId = null; slot.bookedAt = null; slot.note = null; }
   save();
   await refreshFromSupabase();
   rerenderCurrentView();
@@ -6940,6 +6956,17 @@ function renderDetailHistory(clientId) {
 
 let editingProgramId = null; // null = liste, 'new' = opretter, tal = redigerer eksisterende
 let editingProgramBlocks = []; // arbejdskopi af blokke mens der redigeres
+// RETTET (2026-09-16, "program-rod"-undersøgelsen — Johannes forsvundne
+// step-up m.fl.): saveProgram() sammenlignede tidligere "det jeg startede
+// med at redigere" mod "det der nu står i databasen", og slettede alt der
+// var kommet til i mellemtiden (fx en øvelse tilføjet fra mobilen mens
+// redigeringsvinduet stod åbent på web, kombineret med den automatiske
+// 45-sek.-opdatering der udskifter DATA i baggrunden uden at gentegne
+// skærmen — se CHANGELOG for den fulde forklaring). Der føres nu i stedet
+// en eksplicit liste over hvad brugeren RENT FAKTISK har trykket ✕ på —
+// kun DEN slettes ved gem, uanset hvad der ellers måtte være ændret i
+// baggrunden.
+let editingRemovedBlockIds = [];
 
 // Blok-editoren (kartotek-picker, træk/slip, overskrifter) genbruges to steder:
 // klient-programmer og coachens egen program-skabelon-kartotek. Disse ID'er peger
@@ -7357,6 +7384,8 @@ function addHeaderBlock() {
 }
 
 function removeBlock(i) {
+  const removed = editingProgramBlocks[i];
+  if (removed && removed.id != null) editingRemovedBlockIds.push(removed.id);
   editingProgramBlocks.splice(i, 1);
   renderProgramBlockEditor();
 }
@@ -7444,6 +7473,7 @@ function addExerciseBlockFromLibrary(libraryId) {
 function newProgram(clientId) {
   editingProgramId = 'new';
   editingProgramBlocks = [];
+  editingRemovedBlockIds = [];
   renderDetailProgram(clientId);
 }
 
@@ -7452,12 +7482,14 @@ function editProgram(clientId, programId) {
   const client = DATA.clients.find(c => c.id === clientId);
   const program = client.programs.find(p => p.id === programId);
   editingProgramBlocks = JSON.parse(JSON.stringify(program.blocks || []));
+  editingRemovedBlockIds = [];
   renderDetailProgram(clientId);
 }
 
 function cancelProgramEdit(clientId) {
   editingProgramId = null;
   editingProgramBlocks = [];
+  editingRemovedBlockIds = [];
   renderDetailProgram(clientId);
 }
 
@@ -7480,9 +7512,11 @@ function saveProgram(clientId) {
     client.programs.push({ id: Date.now(), name, focus, trainingType, weightLogs: {}, blocks: editingProgramBlocks, sortOrder: (client.programs || []).length });
   } else {
     const program = client.programs.find(p => p.id === editingProgramId);
-    const oldIds = new Set((program.blocks || []).map(b => b.id));
-    const newIds = new Set(editingProgramBlocks.map(b => b.id));
-    oldIds.forEach(id => { if (!newIds.has(id)) pendingDeletes.programBlocks.add(id); });
+    // Kun det brugeren FAKTISK har trykket ✕ på slettes (se
+    // editingRemovedBlockIds ovenfor) — IKKE en diff mod databasens
+    // aktuelle tilstand, som kan have ændret sig i baggrunden mens
+    // redigeringsvinduet stod åbent.
+    editingRemovedBlockIds.forEach(id => pendingDeletes.programBlocks.add(id));
     program.name = name;
     program.focus = focus;
     program.trainingType = trainingType;
@@ -7490,6 +7524,7 @@ function saveProgram(clientId) {
   }
   editingProgramId = null;
   editingProgramBlocks = [];
+  editingRemovedBlockIds = [];
   save();
   renderDetailProgram(clientId);
   showToast('Program gemt');
