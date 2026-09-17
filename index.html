@@ -10609,7 +10609,14 @@ function checkCelebrations(clientId) {
     const key = prog.weekKey + '_' + g.type;
     if (g.done && !client.celebrated[key]) {
       client.celebrated[key] = true;
-      messages.push(`${g.type}: ${g.target} af ${g.target} nået denne uge!`);
+      // Fejlfund (2026-09-17): viste altid "${target} af ${target}", uanset
+      // det RIGTIGE antal — en klient der overopfyldte målet (fx 3 af mål 2)
+      // fik stadig kun "2 af 2 nået", som om målet lige akkurat var nået.
+      messages.push(
+        g.count > g.target
+          ? `${g.type}: Wow, du er over dit mål! ${g.count} af ${g.target} nået denne uge!`
+          : `${g.type}: ${g.count} af ${g.target} nået denne uge!`
+      );
     }
   });
   if (prog.overallDone) {
@@ -10663,7 +10670,7 @@ function getCoachGoalNotifications() {
     prog.goals.forEach(g => {
       const key = prog.weekKey + '_' + g.type;
       if (g.done && !client.coachNotifiedGoals[key]) {
-        notifications.push({ clientId: client.id, clientName: client.name, key, label: `${g.type}: ${g.target} af ${g.target} nået denne uge` });
+        notifications.push({ clientId: client.id, clientName: client.name, key, label: `${g.type}: ${g.count} af ${g.target} nået denne uge` });
       }
     });
     if (prog.overallDone) {
