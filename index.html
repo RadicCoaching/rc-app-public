@@ -9454,7 +9454,7 @@ function mergeWeightPointsWithTanita(bodyMetricEntries, tanitaScans) {
 function latestTanitaBodyFatPercent(tanitaScans) {
   const sorted = [...(tanitaScans || [])].sort((a, b) => b.date.localeCompare(a.date));
   for (const scan of sorted) {
-    const v = (scan.values || []).find(x => x.key === 'body_fat_percent');
+    const v = (scan.values || []).find(x => canonicalTanitaKey(x.key) === 'body_fat_percent');
     if (v && typeof v.value === 'number') return v.value;
   }
   return null;
@@ -9471,10 +9471,11 @@ function extractTanitaValueSeries(tanitaScans) {
   (tanitaScans || []).forEach(scan => {
     (scan.values || []).forEach(v => {
       if (typeof v.value !== 'number') return;
-      if (!byKey.has(v.key)) byKey.set(v.key, { key: v.key, label: v.label, unit: v.unit, explanation: null, points: [] });
-      const entry = byKey.get(v.key);
+      const key = canonicalTanitaKey(v.key);
+      if (!byKey.has(key)) byKey.set(key, { key, label: v.label, unit: v.unit, explanation: null, points: [] });
+      const entry = byKey.get(key);
       entry.points.push({ date: scan.date, value: v.value });
-      entry.explanation = getTanitaExplanation(v.key, v.explanation);
+      entry.explanation = getTanitaExplanation(key, v.explanation);
     });
   });
   return [...byKey.values()];
@@ -9492,6 +9493,39 @@ function extractTanitaValueSeries(tanitaScans) {
 // fast, gennemgået kilde i stedet for AI-genereret pr. scanning). Samme
 // tekst begge steder, for konsistens.
 function tanitaSideText(template, side) { return template.replace('{side}', side); }
+
+// FIX (2026-09-17, fejlgennemgang Fund 1): rc-mobile fik denne nøgle-
+// oversættelse 2026-09-14 (se dens tanitaReference.ts) fordi AI-udtrækket
+// (analyze-tanita-scan) inden prompt-stramningen samme dato gav FORSKELLIGE
+// "key"-navne for samme måling fra scanning til scanning (fx "fat_percent"
+// vs. "body_fat_percent"). Rettelsen blev aldrig porteret hertil — uden den
+// finder web hverken normalområdet, advarslerne eller en sammenhængende
+// kurve for de klienter der har en gammel-navngivet scanning (5 af 8
+// klienter med scanning pr. 2026-09-17, inkl. Rune selv). Ordret samme
+// tabel som rc-mobile, normaliserer ved LÆSNING, rører ikke gemte data.
+const TANITA_KEY_ALIASES = {
+  fat_percent: 'body_fat_percent',
+  body_water_kg: 'total_body_water_kg',
+  tbw_kg: 'total_body_water_kg',
+  body_water_percent: 'total_body_water_percent',
+  ecw: 'ecw_kg',
+  icw: 'icw_kg',
+  muscle_trunk_kg: 'trunk_muscle_kg',
+  muscle_arm_left_kg: 'left_arm_muscle_kg',
+  muscle_arm_right_kg: 'right_arm_muscle_kg',
+  muscle_leg_left_kg: 'left_leg_muscle_kg',
+  muscle_leg_right_kg: 'right_leg_muscle_kg',
+  fat_trunk_percent: 'trunk_fat_percent',
+  fat_arm_left_percent: 'left_arm_fat_percent',
+  fat_arm_right_percent: 'right_arm_fat_percent',
+  fat_left_percent: 'left_arm_fat_percent',
+  fat_right_percent: 'right_arm_fat_percent',
+  fat_leg_left_percent: 'left_leg_fat_percent',
+  fat_leg_right_percent: 'right_leg_fat_percent',
+  height: 'height_cm',
+};
+function canonicalTanitaKey(key) { return TANITA_KEY_ALIASES[key] || key; }
+
 const TANITA_REFERENCE = {
   body_fat_percent: 'Andelen af din kropsvægt der består af fedt. Sunde niveauer varierer med køn, alder og mål — ofte angivet til ca. 10-20 % for mænd og 18-28 % for kvinder, men det er individuelt, ikke et fast facit.',
   fat_mass_kg: 'Den samlede mængde fedt i kroppen, målt i kg. Intet fast normaltal i sig selv — mest brugbart som udvikling over tid, sammen med fedtprocenten.',
@@ -9518,11 +9552,11 @@ const TANITA_REFERENCE = {
   right_leg_fat_percent: tanitaSideText('Fedtprocenten i dit {side} ben. Intet fast normaltal i sig selv — mest brugbart sammenlignet med din samlede fedtprocent og det andet ben, for at se fordelingen.', 'højre'),
 };
 function getTanitaExplanation(key, aiExplanation) {
-  return TANITA_REFERENCE[key] || aiExplanation || null;
+  return TANITA_REFERENCE[canonicalTanitaKey(key)] || aiExplanation || null;
 }
 
 function findTanitaVal(values, key) {
-  const v = (values || []).find(x => x.key === key);
+  const v = (values || []).find(x => canonicalTanitaKey(x.key) === key);
   if (!v) return null;
   const num = typeof v.value === 'number' ? v.value : parseFloat(v.value);
   return isNaN(num) ? null : num;
