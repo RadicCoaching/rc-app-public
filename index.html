@@ -1988,16 +1988,13 @@ async function pushToSupabase() {
   // section-wrapperen ovenfor) — resten synces stadig.
   await section('clients', async () => {
     if (DATA.clients.length) {
-      // SIKKERHEDSFIX (2026-09-16, Fund 4): 'notes' er nu KUN faktisk hentet
-      // for en coach-session (se refreshFromSupabase()) — for en klient-
-      // session er DATA.clients[].notes altid ''. Uden denne udeladelse ville
-      // en klients egen sync forsøge at nulstille ALLE klienters noter til
-      // tomt hver gang, og — fordi det IKKE er et af de felter
-      // enforce_client_vitals_only()-triggeren tillader klienter at ændre —
-      // reelt bare fejle med en synk-fejl hver gang en klient gemte noget som
-      // helst, selv sine egne vitals. Udeladt helt, samme mønster/begrundelse
-      // som pin/code_hash/setup_code nedenfor.
-      const isCoachSession = currentUser === 'coach';
+      // SIKKERHEDSFIX (2026-09-16, Fund 4) + FEJLFUND (2026-09-17, Fund 13a):
+      // 'notes' udelades nu HELT fra denne upsert, for alle sessioner. Da
+      // Fund 4 blev rettet i går, blev skrivningen kun gjort betinget på
+      // isCoachSession (klient-sessioner ville ellers fejle synk pga.
+      // enforce_client_vitals_only()-triggeren) — men clients.notes læses
+      // ingen steder mere overhovedet (client_notes-tabellen har overtaget,
+      // se migrationen 2026-09-04), så selv coach-skrivningen var død kode.
       await sb.from('clients').upsert(DATA.clients.map(c => ({
         // pin/code_hash/setup_code er UDELADT bevidst — de styres udelukkende
         // via generate_client_setup_code-RPC'en (se generateClientSetupCode()),
@@ -2037,7 +2034,11 @@ async function pushToSupabase() {
         auto_reply: c.autoReply || '',
         warmup: c.warmup || null,
         data_retention_until: c.dataRetentionUntil || null,
-        ...(isCoachSession ? { notes: c.notes || '' } : {})
+        // Fejlfund (2026-09-17, Fund 13a, fejlgennemgang): clients.notes
+        // læses ingen steder mere (migrationen 2026-09-04 flyttede det til
+        // client_notes-tabellen og rører bevidst ikke selve kolonnen) — men
+        // her blev den stadig skrevet ved hvert gem, som om den var i brug.
+        // Uskadeligt (ingen skade sket), men en død skrivning fjernet.
       })));
     }
   });
@@ -10569,13 +10570,15 @@ function computeTrainingProgress(clientId) {
   // Gåtur/Cykling m.fl.), vist som ekstra info ved siden af det almindelige antal-mål.
   const isDistanceGoalType = t => t === 'Løb' || (DATA.distanceLoggingEnabled && (DATA.distanceTypes || []).includes(t));
   const kmThisWeekByType = {};
-  if (isDistanceGoalType) {
-    (DATA.runLogs || []).forEach(r => {
-      if (r.clientId !== clientId || !isDateInWeekKey(r.date, weekKey)) return;
-      const t = r.type || 'Løb';
-      kmThisWeekByType[t] = (kmThisWeekByType[t] || 0) + (r.distanceKm || 0);
-    });
-  }
+  // Fejlfund (2026-09-17, Fund 7, fejlgennemgang): testede FUNKTIONEN i
+  // stedet for at kalde den, så betingelsen var altid sand (ingen praktisk
+  // effekt her, blokken skulle altid køre alligevel — men det er en
+  // skrivefejl der ser ud som en betingelse og ikke er det).
+  (DATA.runLogs || []).forEach(r => {
+    if (r.clientId !== clientId || !isDateInWeekKey(r.date, weekKey)) return;
+    const t = r.type || 'Løb';
+    kmThisWeekByType[t] = (kmThisWeekByType[t] || 0) + (r.distanceKm || 0);
+  });
   const goalProgress = goals.map(g => {
     const count = checkinsThisWeek.filter(t => t.type === g.type).length;
     const kmTotal = isDistanceGoalType(g.type) ? (kmThisWeekByType[g.type] || 0) : null;
@@ -10587,7 +10590,15 @@ function computeTrainingProgress(clientId) {
   checkinsThisWeek.forEach(t => {
     if (!goalTypes.has(t.type)) extraCounts[t.type] = (extraCounts[t.type] || 0) + 1;
   });
-  const extras = Object.entries(extraCounts).map(([type, count]) => ({ type, count }));
+  // Fejlfund (2026-09-17, Fund 7): manglede km på ekstra-træninger her, selvom
+  // rc-mobiles trainingGoals.ts allerede regner det med — en klient uden et
+  // sat løbemål, der alligevel logger km, kunne coachen derfor ikke se km for
+  // på web (kun antal). Coachens egen visning af en klients data, ikke en
+  // klient-facing ændring — se standing regel i CLAUDE.md.
+  const extras = Object.entries(extraCounts).map(([type, count]) => ({
+    type, count,
+    kmTotal: isDistanceGoalType(type) ? (kmThisWeekByType[type] || 0) : null,
+  }));
   const overallDone = goalProgress.length > 0 && goalProgress.every(g => g.done);
   return { paused: false, weekKey, goals: goalProgress, extras, overallDone };
 }
@@ -10980,7 +10991,7 @@ function renderTrainingProgressWidget(clientId, isCoachView) {
       const extraRows = (prog.extras && prog.extras.length) ? prog.extras.map(e => `<div style="margin-bottom:10px">
           <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
             <span style="color:var(--warn)">🔥 ${escapeHtml(e.type)} <span style="font-size:11px;opacity:.8">(ekstra)</span></span>
-            <span style="color:var(--warn);font-weight:700">${e.count}×</span>
+            <span style="color:var(--warn);font-weight:700">${e.count}×${e.kmTotal ? ` (${e.kmTotal.toFixed(1)} km)` : ''}</span>
           </div>
           <div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden">
             <div style="height:100%;width:100%;background:var(--warn)"></div>
