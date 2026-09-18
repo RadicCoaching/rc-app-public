@@ -1646,7 +1646,7 @@ function loadData() {
         if (c.showTrainingGoal === undefined) c.showTrainingGoal = false;
         if (c.trainingPause === undefined) c.trainingPause = null;
         if (!c.celebrated) c.celebrated = {};
-        if (!c.coachNotifiedGoals) c.coachNotifiedGoals = {};
+        if (!c.coachDismissedGoals) c.coachDismissedGoals = {};
         if (!c.clientSeenSlotIds) c.clientSeenSlotIds = [];
         if (!c.clientSeenMessageIds) c.clientSeenMessageIds = [];
         if (c.showStatsToClient !== undefined) {
@@ -1722,7 +1722,7 @@ function loadData() {
       { id: 8, name: 'Lat pulldown', category: 'Ryg', description: 'Sid med fast greb i stangen. Træk den ned mod det øverste af brystet, før den kontrolleret tilbage.', image: '' },
     ],
     clients: [
-      { id: 1, name: 'Anette Jensen', pin: '284719', heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachNotifiedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [
+      { id: 1, name: 'Anette Jensen', pin: '284719', heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachDismissedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [
           { id: 9001, name: 'Program A — Ben & Core', weightLogs: {}, blocks: [
             { id: 1, type: 'header', text: 'Fase 1 — Ben & Core' },
             { id: 2, type: 'exercise', libraryId: 1, setsReps: '3×10-12' },
@@ -1731,7 +1731,7 @@ function loadData() {
             { id: 5, type: 'exercise', libraryId: 4, setsReps: '3×45 sek' },
           ] }
         ], notes: '', autoReply: 'Hej Anette! Jeg er ikke online lige nu — jeg vender tilbage hurtigst muligt 💪' },
-      { id: 2, name: 'Brian Vejlby', pin: '539147', heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachNotifiedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [
+      { id: 2, name: 'Brian Vejlby', pin: '539147', heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachDismissedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [
           { id: 9002, name: 'Program A — Overkrop', weightLogs: {}, blocks: [
             { id: 1, type: 'header', text: 'Fase 2 — Overkrop' },
             { id: 2, type: 'exercise', libraryId: 5, setsReps: '4×8' },
@@ -2030,7 +2030,12 @@ async function pushToSupabase() {
         show_training_goal: !!c.showTrainingGoal,
         training_pause: c.trainingPause || null,
         celebrated: c.celebrated || {},
-        coach_notified_goals: c.coachNotifiedGoals || {},
+        // Fund 2 (2026-09-18): skriver bevidst IKKE coach_notified_goals
+        // laengere. Det felt ejes nu alene af check-goals-jobbet (push-dedup),
+        // og webappen risikerede at skrive en forældet udgave tilbage og
+        // dermed udløse de samme push-beskeder igen. Kortet bruger i stedet
+        // sit eget felt:
+        coach_dismissed_goals: c.coachDismissedGoals || {},
         client_seen_slot_ids: c.clientSeenSlotIds || [],
         client_seen_message_ids: c.clientSeenMessageIds || [],
         focus_enabled: !!c.focusEnabled,
@@ -2548,7 +2553,7 @@ async function refreshFromSupabase() {
       trainingGoals: c.training_goals || [],
       dualGoalsEnabled: !!c.feature_dual_training_goals, trainingGoalSets: c.training_goal_sets || [], activeGoalSetId: c.active_goal_set_id || null,
       showTrainingGoal: !!c.show_training_goal,
-      trainingPause: c.training_pause || null, celebrated: c.celebrated || {}, coachNotifiedGoals: c.coach_notified_goals || {},
+      trainingPause: c.training_pause || null, celebrated: c.celebrated || {}, coachDismissedGoals: c.coach_dismissed_goals || {},
       clientSeenSlotIds: c.client_seen_slot_ids || [], clientSeenMessageIds: c.client_seen_message_ids || [],
       focusEnabled: !!c.focus_enabled, focusOverall: c.focus_overall || '', focusCurrent: c.focus_current || '',
       features: {
@@ -8219,7 +8224,7 @@ async function addClient() {
   const autoReply = document.getElementById('new-client-autoreply').value.trim();
   if (!name) { alert('Navn er påkrævet'); return; }
   const newId = Date.now();
-  DATA.clients.push({ id: newId, name, pin: null, heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachNotifiedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [], notes: '', autoReply });
+  DATA.clients.push({ id: newId, name, pin: null, heightCm: null, birthYear: null, sex: null, pal: null, trainingGoals: [], showTrainingGoal: false, trainingPause: null, celebrated: {}, coachDismissedGoals: {}, focusEnabled: false, focusOverall: '', focusCurrent: '', clientSeenSlotIds: [], clientSeenMessageIds: [], visibleStats: { weight: false, bmi: false, bmr: false, kcal: false, sessionsLeft: false, distanceKm: false }, features: { checkins: true, freeMessage: true, multipleCheckins: false, gpsTraining: false }, exercisePhotos: {}, programs: [], notes: '', autoReply });
   // Engangskoden kan først genereres når klienten rent faktisk findes i
   // Supabase (RPC'en opdaterer en eksisterende række) — save() returnerer
   // først når den ventende synkronisering er færdig, se queueSupabaseSync().
@@ -10708,24 +10713,35 @@ function showCelebration(messages) {
 // ══════════════════════════════════════
 // COACH: NOTIFIKATION NÅR EN KLIENT NÅR SIT UGENTLIGE TRÆNINGSMÅL
 // Bruger samme fremgangs-beregning som klientens egen fejring (computeTrainingProgress),
-// men holder styr på hvad COACHEN allerede har set (client.coachNotifiedGoals) — helt
+// men holder styr på hvad COACHEN selv har skjult (client.coachDismissedGoals) — helt
 // adskilt fra klientens egen "celebrated"-liste, så de to ikke påvirker hinanden.
+//
+// FUND 2 (2026-09-18, FEJL_GENNEMGANG_2026-09-17.md): læste før
+// client.coachNotifiedGoals — det SAMME felt som baggrundsjobbet check-goals
+// bruger til at undgå at sende samme push to gange. Jobbet kører hvert 15.
+// minut og satte nøglen længe før Rune åbnede appen, så kortet i praksis
+// aldrig kunne vise noget, og ×-knappen aldrig havde noget at skjule.
+// Bekræftet med rigtige data: 9 mål nået i indeværende uge, 9 allerede
+// kvitteret af jobbet, 0 vist. Kortet har nu sit eget felt,
+// coach_dismissed_goals; jobbets felt er urørt og styrer fortsat kun push.
+// De to må aldrig slås sammen igen. Samme rettelse i rc-mobiles
+// CoachDashboardScreen.tsx samme dag.
 // ══════════════════════════════════════
 function getCoachGoalNotifications() {
   const notifications = [];
   DATA.clients.forEach(client => {
     const prog = computeTrainingProgress(client.id);
     if (!prog || prog.paused) return;
-    if (!client.coachNotifiedGoals) client.coachNotifiedGoals = {};
+    if (!client.coachDismissedGoals) client.coachDismissedGoals = {};
     prog.goals.forEach(g => {
       const key = prog.weekKey + '_' + g.type;
-      if (g.done && !client.coachNotifiedGoals[key]) {
+      if (g.done && !client.coachDismissedGoals[key]) {
         notifications.push({ clientId: client.id, clientName: client.name, key, label: `${g.type}: ${g.count} af ${g.target} nået denne uge` });
       }
     });
     if (prog.overallDone) {
       const key = prog.weekKey + '_overall';
-      if (!client.coachNotifiedGoals[key]) {
+      if (!client.coachDismissedGoals[key]) {
         notifications.push({ clientId: client.id, clientName: client.name, key, label: 'Hele ugens træningsmål er i hus! 🎉' });
       }
     }
@@ -10762,8 +10778,8 @@ function renderGoalNotifications() {
 function dismissGoalNotification(clientId, key) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client) return;
-  if (!client.coachNotifiedGoals) client.coachNotifiedGoals = {};
-  client.coachNotifiedGoals[key] = true;
+  if (!client.coachDismissedGoals) client.coachDismissedGoals = {};
+  client.coachDismissedGoals[key] = true;
   save();
   refreshDashboardNotifications();
 }
