@@ -4243,7 +4243,7 @@ async function renderThreadVideoMessages(clientId) {
   const el = document.getElementById('thread-video-messages');
   if (!el) return;
   const client = DATA.clients.find(c => c.id === clientId);
-  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Dig' : (client ? client.name : 'Klient'), 'hideVideoMessageForCoach', v => !v.from_coach);
+  el.innerHTML = await videoMessagesHtml(rows, v => v.from_coach ? 'Dig' : (client ? client.name : 'Klient'), 'hideVideoMessageForCoach', v => !v.from_coach, clientId);
 }
 
 // Design-gennemgang, punkt m4: "To uforenelige svar-mekanismer i én
@@ -11651,10 +11651,18 @@ async function extractFunctionErrorMessage(error) {
   return error.message || 'Ukendt fejl';
 }
 
-function openVideoMessageModal(clientId, fromCoach) {
+// preferredMedia (2026-09-18): sættes når modalen åbnes som SVAR på en
+// videobesked, hvor coachen allerede har valgt "Video" eller "Billede" —
+// begrænser filvælgeren til den type. Uden den (den almindelige
+// "Send video/billede"-knap) er adfærden uændret: begge dele kan vælges.
+function openVideoMessageModal(clientId, fromCoach, preferredMedia) {
   vmTargetClientId = clientId;
   vmFromCoach = fromCoach;
   vmFile = null;
+  const fileInput = document.getElementById('vm-file-input');
+  if (fileInput) {
+    fileInput.accept = preferredMedia === 'photo' ? 'image/*' : preferredMedia === 'video' ? 'video/*' : 'video/*,image/*';
+  }
   document.getElementById('vm-file-input').value = '';
   document.getElementById('vm-preview').innerHTML = '';
   document.getElementById('vm-caption').value = '';
@@ -11743,7 +11751,14 @@ async function loadVideoMessages(clientId, viewer) {
 // modtageren) markerer den som set. Se markVideoMessageViewedWeb() og
 // cleanup-video-messages-Edge Function'en (rc-mobile-repoet) for selve
 // 15-minutters-sletningen.
-function videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn) {
+// replyClientId (2026-09-18): sættes KUN fra coachens tråd-visning
+// (renderThreadVideoMessages) — Rune: "Synes ikke jeg har direkte svar
+// mulighed på videobeskeder jeg får?? Det skal både kunne gøres som tekst og
+// som video". Knappen vises kun på beskeder man er MODTAGER af (altså
+// klientens videoer, ikke ens egne). Klientens egen visning er bevidst
+// uændret — webappen er coach-only fremover, se CLAUDE.md.
+function videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn, replyClientId) {
+  const canReply = replyClientId != null && isRecipientFn(v);
   return `<div class="checkin-card">
     <div class="checkin-header">
       <div class="checkin-time">${fmtDate((v.created_at || '').split('T')[0])} · ${escapeHtml(senderLabelFn(v))}</div>
@@ -11755,12 +11770,74 @@ function videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn) {
         : `<button class="btn btn-block" onclick="revealVideoMessage(${v.id}, '${v.video_path}', ${isRecipientFn(v) ? 'true' : 'false'}, '${v.media_type}')">▶ Tryk for at se ${v.media_type === 'photo' ? 'billede' : 'video'}</button>`}
     </div>
     ${v.caption ? `<div class="checkin-comment" style="margin-top:8px">"${escapeHtml(v.caption)}"</div>` : ''}
+    ${canReply ? `<div id="vm-reply-${v.id}" style="margin-top:8px">
+      <button class="btn btn-sm" onclick="showVideoReplyChoices(${v.id}, ${replyClientId})">↩ Svar</button>
+    </div>` : ''}
   </div>`;
 }
 
-async function videoMessagesHtml(rows, senderLabelFn, hideFnName, isRecipientFn) {
+// De tre svar-veje på en videobesked: tekst (ny besked i samme tråd, samme
+// rækkeformat som sendCoachMessage), video eller billede (den eksisterende
+// videobesked-modal, med medietypen forvalgt).
+function showVideoReplyChoices(id, clientId) {
+  const el = document.getElementById('vm-reply-' + id);
+  if (!el) return;
+  el.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">
+    <button class="btn btn-sm" onclick="showVideoReplyText(${id}, ${clientId})">✍️ Tekst</button>
+    <button class="btn btn-sm" onclick="openVideoMessageModal(${clientId}, true, 'video')">🎥 Video</button>
+    <button class="btn btn-sm" onclick="openVideoMessageModal(${clientId}, true, 'photo')">📷 Billede</button>
+    <button class="btn btn-sm" onclick="cancelVideoReply(${id}, ${clientId})">Annullér</button>
+  </div>`;
+}
+
+function showVideoReplyText(id, clientId) {
+  const el = document.getElementById('vm-reply-' + id);
+  if (!el) return;
+  el.innerHTML = `<div class="field" style="margin-bottom:8px">
+      <textarea id="vm-reply-input-${id}" placeholder="Skriv dit svar..."></textarea>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-sm btn-primary" onclick="sendVideoTextReply(${id}, ${clientId})">Send svar</button>
+      <button class="btn btn-sm" onclick="cancelVideoReply(${id}, ${clientId})">Annullér</button>
+    </div>`;
+  const input = document.getElementById('vm-reply-input-' + id);
+  if (input) input.focus();
+}
+
+function cancelVideoReply(id, clientId) {
+  const el = document.getElementById('vm-reply-' + id);
+  if (!el) return;
+  el.innerHTML = `<button class="btn btn-sm" onclick="showVideoReplyChoices(${id}, ${clientId})">↩ Svar</button>`;
+}
+
+// Samme rækkeformat som sendCoachMessage() — men uden dens "ubesvarede
+// check-ins"-advarsel: dette er et svar på en konkret videobesked, ikke en
+// ny fri besked man kan komme til at tro besvarer et check-in.
+function sendVideoTextReply(id, clientId) {
+  const input = document.getElementById('vm-reply-input-' + id);
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+  const ci = {
+    id: Date.now(), clientId,
+    date: todayLocalStr(),
+    energy: null, sleep: null, training: null,
+    comment: '',
+    reply: text,
+    autoReplied: false,
+    fromCoach: true,
+    hiddenForCoach: false,
+    hiddenForClient: false
+  };
+  DATA.checkins.push(ci);
+  coachDirtyCheckinIds.add(ci.id);
+  save();
+  showToast('Svar sendt');
+  renderAllCheckins();
+}
+
+async function videoMessagesHtml(rows, senderLabelFn, hideFnName, isRecipientFn, replyClientId) {
   if (!rows.length) return '';
-  return rows.map(v => videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn)).join('');
+  return rows.map(v => videoMessageCardHtml(v, senderLabelFn, hideFnName, isRecipientFn, replyClientId)).join('');
 }
 
 async function revealVideoMessage(id, videoPath, isRecipient, mediaType) {
