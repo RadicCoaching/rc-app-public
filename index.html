@@ -10550,6 +10550,24 @@ function isDateInWeekKey(dateStr, weekKey) {
   return getMondayOf(dateStr) === weekKey;
 }
 
+// Forslag 5.3 (2026-09-19, rc-mobiles forbedringsrapport): pausens
+// "Forventet retur"-dato blev aldrig læst i en betingelse — computeTrainingProgress()
+// nedenfor tjekkede kun `active`, så en klient sat på "pause til 1/9" stadig stod
+// som på pause i dag, indtil Rune selv huskede at slå den fra. Coachen så altså
+// "⏸ Pause" i klientlisten og intet mål-overblik for en klient der reelt var
+// tilbage for uger siden. Spejler isPauseActive() i rc-mobiles
+// src/lib/trainingGoals.ts 1:1 — de to må ikke komme ud af trit.
+//
+// Datoen er et RETUR-tidspunkt, ikke den sidste pausedag: står der 1/9, træner
+// klienten igen d. 1/9. Derfor `today < until`, ikke `<=`. Ingen dato sat =
+// pausen løber indtil den slås fra manuelt, præcis som før.
+function isPauseActive(pause) {
+  if (!pause || !pause.active) return false;
+  const until = String(pause.until || '').trim();
+  if (!until) return true;
+  return todayLocalStr() < until;
+}
+
 // Differentierede træningsmål (2026-09-10, matcher rc-mobiles
 // trainingGoals.ts) — klienten kan have to eller flere navngivne målsæt
 // (fx "Hjemme"/"Offshore") og selv vælge hvilket der er aktivt. Allerede
@@ -10569,7 +10587,7 @@ function effectiveTrainingGoals(client) {
 function computeTrainingProgress(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   if (!client) return null;
-  if (client.trainingPause && client.trainingPause.active) {
+  if (isPauseActive(client.trainingPause)) {
     return { paused: true, resumeDate: client.trainingPause.until || null };
   }
   const weekKey = currentWeekKey();
@@ -10631,7 +10649,11 @@ const MAX_STREAK_WEEKS = 52; // 1 år, praktisk loft mod uendelig løkke
 
 function computeWeeklyStreak(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
-  if (!client || (client.trainingPause && client.trainingPause.active)) return 0;
+  // Forslag 5.3 (2026-09-19): havde sit EGET pause-tjek ved siden af
+  // computeTrainingProgress()s — begge bruger nu isPauseActive(), så de to ikke
+  // kan svare forskelligt på om en klient er på pause. Samme rettelse som i
+  // rc-mobiles computeWeeklyStreak().
+  if (!client || isPauseActive(client.trainingPause)) return 0;
   const goals = effectiveTrainingGoals(client);
   if (!goals.length) return 0;
   const allCheckins = (DATA.trainingCheckins || []).filter(t => t.clientId === clientId);
