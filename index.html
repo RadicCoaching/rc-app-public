@@ -1707,7 +1707,7 @@ function loadData() {
   } catch(e){}
   return {
     coachPin: '123456',
-    coachStatus: { online: true, offlineMsg: 'Hej! Jeg er offline lige nu — jeg vender tilbage hurtigst muligt 💪' },
+    coachStatus: { online: true, offlineUntil: null, offlineMsg: 'Hej! Jeg er offline lige nu — jeg vender tilbage hurtigst muligt 💪' },
     programTemplates: [],
     conversationLogs: [],
     timeLogs: [],
@@ -1799,6 +1799,43 @@ function toLocalDateStr(d) {
 }
 function todayLocalStr() {
   return toLocalDateStr(new Date());
+}
+
+// Forslag 1.2 (2026-09-19, rc-mobiles forbedringsrapport): "offline" kan nu
+// have en SLUTTID (coach_status.offline_until), så den slår sig selv fra igen.
+// Uden en sluttid er adfærden præcis som før. Spejler isCoachOffline() i
+// rc-mobiles src/lib/coachOffline.ts — de to må ikke svare forskelligt på om
+// Rune er offline, siden de læser samme række i samme database.
+//
+// Bemærk `online !== false` og ikke `!online`: en manglende række skal betyde
+// "online" (ingen autosvar), som webappen allerede gjorde før.
+function isCoachOfflineNow(status, now) {
+  const s = status || (typeof DATA !== 'undefined' ? DATA.coachStatus : null);
+  if (!s || s.online !== false) return false;
+  const until = s.offlineUntil;
+  if (!until) return true;
+  const ts = Date.parse(until);
+  if (isNaN(ts)) return true;
+  return (now || new Date()).getTime() < ts;
+}
+
+// "i dag kl. 17:00" / "i morgen kl. 08:00" / "24/12 kl. 08:00" — samme ordlyd
+// som app'ens formatOfflineUntil(), så statuslinjen læses ens begge steder.
+function formatOfflineUntilDa(until, now) {
+  if (!until) return '';
+  const d = new Date(until);
+  if (isNaN(d.getTime())) return '';
+  const ref = now || new Date();
+  const time = `kl. ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  const dayStr = toLocalDateStr(d);
+  const todayStr = toLocalDateStr(ref);
+  const tomorrow = new Date(ref); tomorrow.setDate(tomorrow.getDate() + 1);
+  if (dayStr === todayStr) return `i dag ${time}`;
+  if (dayStr === toLocalDateStr(tomorrow)) return `i morgen ${time}`;
+  const daysAhead = Math.round((new Date(dayStr+'T12:00:00') - new Date(todayStr+'T12:00:00')) / 86400000);
+  const DAGE = ['søndag','mandag','tirsdag','onsdag','torsdag','fredag','lørdag'];
+  if (daysAhead > 1 && daysAhead <= 6) return `på ${DAGE[d.getDay()]} ${time}`;
+  return `${d.getDate()}/${d.getMonth()+1} ${time}`;
 }
 
 // Udvidet 2026-09-10 (Rune): "Ben" og "Arme" var for brede til at vise reelt
@@ -1953,7 +1990,7 @@ async function pushToSupabase() {
 
   await section('coach_status', async () => {
     await sb.from('coach_status').upsert({
-      id: 1, online: DATA.coachStatus.online, offline_msg: DATA.coachStatus.offlineMsg,
+      id: 1, online: DATA.coachStatus.online, offline_until: DATA.coachStatus.offlineUntil || null, offline_msg: DATA.coachStatus.offlineMsg,
       training_types: DATA.trainingTypes || [], celebration_photo: DATA.coachCelebrationPhoto || '',
       distance_logging_enabled: !!DATA.distanceLoggingEnabled, distance_types: DATA.distanceTypes || [],
       tanita_scan_monthly_limit: DATA.tanitaScanMonthlyLimit
@@ -2580,7 +2617,7 @@ async function refreshFromSupabase() {
 
     DATA = {
       coachPin: (coachSecretsRes.data && coachSecretsRes.data.pin) || '1234',
-      coachStatus: { online: coachRes.data ? coachRes.data.online : true, offlineMsg: (coachRes.data && coachRes.data.offline_msg) || '' },
+      coachStatus: { online: coachRes.data ? coachRes.data.online : true, offlineUntil: (coachRes.data && coachRes.data.offline_until) || null, offlineMsg: (coachRes.data && coachRes.data.offline_msg) || '' },
       trainingTypes: (coachRes.data && coachRes.data.training_types && coachRes.data.training_types.length) ? coachRes.data.training_types : ['Løb', 'Gåtur', 'Cykling', 'Spinning', 'Styrke', 'OCR', 'CrossFit', 'Andet'],
       coachCelebrationPhoto: (coachRes.data && coachRes.data.celebration_photo) || '',
       distanceLoggingEnabled: !!(coachRes.data && coachRes.data.distance_logging_enabled),
@@ -3748,12 +3785,17 @@ function renderCoachDashboard() {
   // Status toggle
   const t = document.getElementById('coach-status-toggle');
   const l = document.getElementById('coach-status-label');
-  if (DATA.coachStatus.online) {
+  // Forslag 1.2 (2026-09-19): en udløbet sluttid vises som Online, så web og
+  // app ikke siger hver sit om samme række.
+  if (!isCoachOfflineNow()) {
     t.classList.add('on');
     l.innerHTML = '<strong>Online</strong> — klienter kan få svar';
   } else {
     t.classList.remove('on');
-    l.innerHTML = '<strong>Offline</strong> — autosvar er aktivt';
+    const until = formatOfflineUntilDa(DATA.coachStatus.offlineUntil);
+    l.innerHTML = until
+      ? `<strong>Offline ${until}</strong> — autosvar er aktivt indtil da`
+      : '<strong>Offline</strong> — autosvar er aktivt';
   }
 
   // Client list
@@ -3911,7 +3953,13 @@ function renderCoachDashboard() {
 }
 
 function toggleCoachStatus() {
-  DATA.coachStatus.online = !DATA.coachStatus.online;
+  // Forslag 1.2 (2026-09-19): en sluttid sat i app'en ryddes når kontakten
+  // røres her. Ellers kunne en gammel, passeret dato blive hængende, og en
+  // offline-tilstand slået til fra web ville være udløbet på forhånd — altså
+  // slet ikke virke. Webappen sætter selv ingen sluttid (det er en handling
+  // man laver på telefonen, undervejs); den respekterer bare en der er sat.
+  DATA.coachStatus.online = !isCoachOfflineNow() ? false : true;
+  DATA.coachStatus.offlineUntil = null;
   save();
   renderCoachDashboard();
 }
@@ -8773,7 +8821,9 @@ function submitCheckin() {
     return;
   }
 
-  const isOffline = !DATA.coachStatus.online;
+  // Forslag 1.2 (2026-09-19): respekterer nu en sluttid, som app'ens
+  // CheckinScreen/ClientMessagesScreen gør.
+  const isOffline = isCoachOfflineNow();
   const autoReply = client.autoReply || DATA.coachStatus.offlineMsg;
 
   const ci = {
