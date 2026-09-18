@@ -254,9 +254,14 @@ body::before{
 .tag{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:3px;background:var(--accent-dim);color:var(--accent)}
 .divider{height:1px;background:var(--border);margin:16px 0}
 .back-btn{display:flex;align-items:center;gap:6px;background:none;border:none;color:var(--gray);font-size:14px;cursor:pointer;padding:0}
-.reply-input-row{display:flex;gap:8px;margin-top:10px}
-.reply-input-row input{flex:1;padding:9px 12px;background:var(--dark);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--white);font-size:13px;outline:none}
-.reply-input-row input:focus{border-color:var(--accent)}
+.reply-input-row{display:flex;gap:8px;margin-top:10px;align-items:flex-end}
+.reply-input-row input,.reply-input-row textarea{flex:1;padding:9px 12px;background:var(--dark);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--white);font-size:13px;outline:none}
+.reply-input-row input:focus,.reply-input-row textarea:focus{border-color:var(--accent)}
+/* Rune: "hvor jeg nu med enter sender beskeden, skal jeg kunne skifte linje."
+   Svarfelterne er textarea nu — Enter laver linjeskift, Send-knappen (eller
+   Cmd/Ctrl+Enter) sender. min-height matcher den gamle ét-linjes inputhøjde,
+   så rækken ser uændret ud indtil man rent faktisk skriver flere linjer. */
+.reply-input-row textarea{min-height:37px;max-height:160px;resize:vertical;font-family:inherit;line-height:1.35}
 .history-entry{padding:12px 0;border-bottom:1px solid var(--border)}
 .history-entry:last-child{border-bottom:none}
 .history-date{font-size:11px;color:var(--gray);margin-bottom:6px}
@@ -4048,7 +4053,7 @@ function renderCheckinCard(ci, client, showReply = false) {
     ${ci.comment ? `<div class="checkin-comment">"${escapeHtml(ci.comment)}"</div>` : ''}
     ${ci.reply ? `<div class="checkin-reply"><div class="reply-lbl">Rune${ci.autoReplied ? '<span class="auto-badge">Auto</span>' : ''}</div>${escapeHtml(ci.reply)}</div>` : ''}
     ${showReply ? `<div class="reply-input-row">
-      <input type="text" placeholder="${hasRealReply ? 'Opdatér svar...' : (ci.autoReplied ? 'Skriv et personligt svar i stedet...' : 'Skriv svar...')}" value="${hasRealReply ? escapeHtml(ci.reply) : ''}" onkeydown="if(event.key==='Enter')sendReply(${ci.id}, this)">
+      <textarea rows="1" placeholder="${hasRealReply ? 'Opdatér svar...' : (ci.autoReplied ? 'Skriv et personligt svar i stedet...' : 'Skriv svar...')}" onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();sendReply(${ci.id}, this);}">${hasRealReply ? escapeHtml(ci.reply) : ''}</textarea>
       <button class="btn btn-sm btn-primary" onclick="sendReply(${ci.id}, this.previousElementSibling)">${hasRealReply ? 'Opdatér' : 'Send'}</button>
     </div>` : ''}
   </div>`;
@@ -6901,7 +6906,7 @@ function renderDetailHistory(clientId) {
         ${t.note ? `<div class="checkin-comment">"${escapeHtml(t.note)}"</div>` : ''}
         ${t.reply ? `<div class="checkin-reply"><div class="reply-lbl">Rune</div>${escapeHtml(t.reply)}</div>` : ''}
         <div class="reply-input-row">
-          <input type="text" placeholder="${t.reply ? 'Opdatér svar...' : 'Skriv svar...'}" value="${t.reply ? escapeHtml(t.reply) : ''}" onkeydown="if(event.key==='Enter')saveTrainingReply(${t.id}, this)">
+          <textarea rows="1" placeholder="${t.reply ? 'Opdatér svar...' : 'Skriv svar...'}" onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();saveTrainingReply(${t.id}, this);}">${t.reply ? escapeHtml(t.reply) : ''}</textarea>
           <button class="btn btn-sm btn-primary" onclick="saveTrainingReply(${t.id}, this.previousElementSibling)">${t.reply ? 'Opdatér' : 'Send'}</button>
         </div>
       </div>`;
