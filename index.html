@@ -2080,7 +2080,12 @@ async function pushToSupabase() {
         focus_current: c.focusCurrent || '',
         auto_reply: c.autoReply || '',
         warmup: c.warmup || null,
-        data_retention_until: c.dataRetentionUntil || null,
+        // 2026-09-19 (Rune: "klienter i afslutning får fornyet deres dato når
+        // jeg laver noget i deres app"): skriver bevidst IKKE
+        // data_retention_until her længere. Feltet kan også ændres fra
+        // mobilappen, og en blanket-skrivning fra en forældet browser-kopi
+        // kunne overskrive den rigtige dato. startRetention()/resetRetention()
+        // skriver nu selv den ene kolonne direkte. Samme mønster som `groups`.
         // Fejlfund (2026-09-17, Fund 13a, fejlgennemgang): clients.notes
         // læses ingen steder mere (migrationen 2026-09-04 flyttede det til
         // client_notes-tabellen og rører bevidst ikke selve kolonnen) — men
@@ -8102,20 +8107,27 @@ function saveClientSettings(clientId) {
 // Pilot-/dataopbevaringsfrist (Rune, 2026-08-28): "sætter de '3 måneder i
 // gang'... appen huske mig på når de er gået, og jeg kan resette hvis
 // klienten køber en træning." Samme funktion portet til rc-mobile samme dag.
-function startRetention(clientId) {
+// 2026-09-19: skriver nu selve kolonnen direkte (ikke via blanket-gemningen i
+// pushToSupabase, som ikke længere rører feltet) og viser først "sat" når
+// databasen har bekræftet det. Databasen nægter desuden at flytte en allerede
+// sat dato (trigger clients_retention_date_guard) — kun tom→dato og dato→tom.
+async function startRetention(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
   const target = new Date();
   target.setMonth(target.getMonth() + 3);
-  client.dataRetentionUntil = toLocalDateStr(target);
-  save();
+  const dateStr = toLocalDateStr(target);
+  const { data, error } = await sb.from('clients').update({ data_retention_until: dateStr }).eq('id', clientId).select('data_retention_until').single();
+  if (error) { showToast('⚠ Kunne ikke gemme: ' + error.message); return; }
+  client.dataRetentionUntil = data ? data.data_retention_until : dateStr;
   renderDetailSettings(clientId);
   showToast('Frist sat');
 }
 
-function resetRetention(clientId) {
+async function resetRetention(clientId) {
   const client = DATA.clients.find(c => c.id === clientId);
+  const { error } = await sb.from('clients').update({ data_retention_until: null }).eq('id', clientId);
+  if (error) { showToast('⚠ Kunne ikke gemme: ' + error.message); return; }
   client.dataRetentionUntil = null;
-  save();
   renderDetailSettings(clientId);
   showToast('Frist nulstillet');
 }
