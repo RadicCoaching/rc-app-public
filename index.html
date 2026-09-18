@@ -2336,7 +2336,7 @@ async function pushToSupabase() {
   await section('coach_tasks', async () => {
     if (DATA.coachTasks && DATA.coachTasks.length) {
       await sb.from('coach_tasks').upsert(DATA.coachTasks.map(t => ({
-        id: t.id, client_id: t.clientId || null, title: t.title, day_of_week: t.dayOfWeek ?? null, due_date: t.dueDate || null
+        id: t.id, client_id: t.clientId || null, title: t.title, day_of_week: t.dayOfWeek ?? null, due_date: t.dueDate || null, completed_dates: t.completedDates || []
       })));
     }
     if (pendingDeletes.coachTasks.size) {
@@ -2639,7 +2639,7 @@ async function refreshFromSupabase() {
       trainingCheckins: (tcRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, date: t.date, type: t.type, rating: t.rating || null, note: t.note || '', photo: t.photo_url || '', runLogId: t.run_log_id || null, coachSeen: !!t.coach_seen, snoozedUntil: t.snoozed_until || null, reply: t.reply || '' })),
       mealLogs: (mlRes.data || []).map(m => ({ id: m.id, clientId: m.client_id, date: m.date, time: m.time || '', mealType: m.meal_type, note: m.note || '', photo: m.photo_url || '' })),
       sessionCredits: (scRes.data || []).map(s => ({ id: s.id, clientId: s.client_id, date: s.date, type: s.type, delta: s.delta, note: s.note || '' })),
-      coachTasks: (ctRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, title: t.title, dayOfWeek: t.day_of_week, dueDate: t.due_date || null })),
+      coachTasks: (ctRes.data || []).map(t => ({ id: t.id, clientId: t.client_id, title: t.title, dayOfWeek: t.day_of_week, dueDate: t.due_date || null , completedDates: t.completed_dates || [] })),
       conversationLogs: (convRes.data || []).map(l => ({ id: l.id, date: l.date, clientId: l.client_id, type: l.type || null, content: l.content || '', thoughts: l.thoughts || '', nextStep: l.next_step || '' })),
       timeLogs: (timeLogRes.data || []).map(l => ({ id: l.id, date: l.date, clientId: l.client_id, type: l.type || null, minutes: l.minutes || 0, note: l.note || '' })),
       bookingSlots: (bookingRes.data || []).map(s => ({
@@ -10927,6 +10927,22 @@ function toggleCoachTasksRest() {
   coachTasksRestExpanded = true;
   renderCoachTasksSection();
 }
+
+// Forslag 10.1 (2026-09-19): kryds en opgave af for I DAG. Ren tilføjelse/
+// fjernelse af dagens dato i coach_tasks.completed_dates — opgaven slettes
+// ikke, så den er både fortrydelig med ét klik og bliver stående som
+// historik. Spejler toggleTaskDone() i rc-mobiles src/lib/coachTasks.ts.
+function toggleCoachTaskDone(taskId) {
+  const t = (DATA.coachTasks || []).find(x => x.id === taskId);
+  if (!t) return;
+  const todayStr = todayLocalStr();
+  const dates = Array.isArray(t.completedDates) ? t.completedDates : [];
+  t.completedDates = dates.includes(todayStr)
+    ? dates.filter(d => d !== todayStr)
+    : [...new Set([...dates, todayStr])].sort();
+  save();
+  renderCoachTasksSection();
+}
 // Rune: "vil gerne at 'mine opgaver' kan tilskrives en bestemt dato også?
 // Feks Johanne skal jeg planlægge en løbetur efter en bestemt dato" —
 // opgaver kan nu ENTEN gentages ugentligt (dayOfWeek) ELLER have en
@@ -10942,8 +10958,16 @@ function renderCoachTasksSection() {
   const todayStr = todayLocalStr();
   const tasks = DATA.coachTasks || [];
   const isDueTodayOrOverdue = t => t.dueDate && t.dueDate <= todayStr;
-  const today = tasks.filter(t => t.dayOfWeek === todayDow || isDueTodayOrOverdue(t));
-  const rest = tasks.filter(t => !(t.dayOfWeek === todayDow) && !isDueTodayOrOverdue(t))
+  // Forslag 10.1 (2026-09-19): opgaver kan nu krydses af for I DAG
+  // (coach_tasks.completed_dates, en liste af datoer). En ugedags-opgave
+  // dukker af sig selv op igen næste uge, fordi kun DAGENS dato står i
+  // listen; en dato-opgave forsvinder fra listen uden at blive slettet, så
+  // historikken bevares. Spejler isTaskDoneOn() i rc-mobiles
+  // src/lib/coachTasks.ts.
+  const isDoneToday = t => Array.isArray(t.completedDates) && t.completedDates.includes(todayStr);
+  const doneToday = tasks.filter(t => isDoneToday(t) && (t.dayOfWeek === todayDow || isDueTodayOrOverdue(t)));
+  const today = tasks.filter(t => !isDoneToday(t) && (t.dayOfWeek === todayDow || isDueTodayOrOverdue(t)));
+  const rest = tasks.filter(t => !isDoneToday(t) && !(t.dayOfWeek === todayDow) && !isDueTodayOrOverdue(t))
     .sort((a, b) => {
       const keyOf = t => t.dueDate ? (new Date(t.dueDate) - new Date(todayStr)) / 86400000 : (t.dayOfWeek - todayDow + 7) % 7;
       return keyOf(a) - keyOf(b);
@@ -10952,16 +10976,24 @@ function renderCoachTasksSection() {
   const taskLabel = t => t.dueDate ? fmtDate(t.dueDate) : WEEKDAY_LABELS[t.dayOfWeek];
 
   const rowsHtml = today.map(t => `
-    <div class="card" style="margin-bottom:6px;background:var(--accent);display:flex;justify-content:space-between;align-items:center">
+    <div class="card" style="margin-bottom:6px;background:var(--accent);display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <button class="btn-icon" style="color:#111" title="Markér som klaret i dag" onclick="event.stopPropagation(); toggleCoachTaskDone(${t.id})">☐</button>
       <div style="color:#111;font-weight:700;font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">${t.dueDate ? '📅' : 'I DAG'} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
       <button class="btn-icon" style="color:#111" onclick="event.stopPropagation(); deleteCoachTask(${t.id})">×</button>
     </div>`).join('') + (coachTasksRestExpanded ? rest.map(t => `
-    <div class="card" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+    <div class="card" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <button class="btn-icon" title="Markér som klaret i dag" onclick="event.stopPropagation(); toggleCoachTaskDone(${t.id})">☐</button>
       <div style="font-size:13px;cursor:pointer;flex:1" onclick="openEditCoachTask(${t.id})">${t.dueDate ? '📅 ' : ''}${taskLabel(t)} — ${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
       <button class="btn-icon" onclick="event.stopPropagation(); deleteCoachTask(${t.id})">×</button>
     </div>`).join('') : (rest.length
       ? `<div class="card-sub" style="text-align:center;cursor:pointer;color:var(--accent)" onclick="toggleCoachTasksRest()">Vis resten af opgaverne (${rest.length})</div>`
-      : ''));
+      : '')) + (doneToday.length ? `
+    <div class="card-sub" style="margin:6px 0 2px">✓ Klaret i dag (${doneToday.length})</div>` + doneToday.map(t => `
+    <div class="card" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px;opacity:.6">
+      <button class="btn-icon" style="color:var(--accent)" title="Fortryd fluebenet" onclick="event.stopPropagation(); toggleCoachTaskDone(${t.id})">☑</button>
+      <div style="font-size:13px;flex:1;text-decoration:line-through">${escapeHtml(t.title)}${t.clientId ? ` (${escapeHtml(clientName(t.clientId))})` : ''}</div>
+      <button class="btn-icon" onclick="event.stopPropagation(); deleteCoachTask(${t.id})">×</button>
+    </div>`).join('') : '');
 
   el.innerHTML = `
     <div class="section-head" style="display:flex;justify-content:space-between;align-items:center">
