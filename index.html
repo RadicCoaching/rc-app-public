@@ -11377,6 +11377,9 @@ async function saveTrainingCheckin() {
   if (byCoach) {
     showToast('Træning logget for klienten 💪');
     tcTargetClientId = null;
+    // Sektionen "Træning gennemført" er foldet sammen som standard — fold den
+    // ud, så den nye registrering kan ses med det samme.
+    openHistoryGroups.add('training');
     renderDetailHistory(cid);
     return;
   }
