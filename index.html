@@ -6946,7 +6946,8 @@ function renderDetailHistory(clientId) {
   // coach-detaljevisningen er allerede kun synlig for coachen.
   const cls = (DATA.conversationLogs || []).filter(l => l.clientId === clientId).map(l => ({ date: l.date, kind: 'samtale', data: l }));
 
-  const widget = renderTrainingProgressWidget(clientId, true);
+  const widget = renderTrainingProgressWidget(clientId, true)
+    + `<button class="btn btn-sm btn-block" style="margin:0 0 12px" onclick="openTrainingCheckinModal(${clientId})">🏃 + Log træning for ${escapeHtml(client ? client.name : 'klienten')}</button>`;
 
   if (!cis.length && !tcs.length && !mls.length && !cls.length) {
     el.innerHTML = widget + '<div class="empty"><span class="empty-icon">📋</span><p>Ingen check-ins endnu</p></div>';
@@ -11237,6 +11238,13 @@ function deleteTrainingCheckinLog(id, clientId, isCoachView) {
 // TRÆNING GENNEMFØRT — check-in med type + valgfrit foto
 // ══════════════════════════════════════
 let tcRating = 0;
+// 2026-09-19 (Rune: "kan ikke registrere en træning jeg har lavet med en klient"):
+// coachen kan logge en træning FOR en klient fra klient-detaljen. Formularen er
+// klientens egen, så hele flowet slår op via tcClientId() i stedet for
+// currentUser — for en klient er det uændret (currentUser), for coachen den
+// klient der blev åbnet fra.
+let tcTargetClientId = null;
+function tcClientId() { return (currentUser === 'coach' && tcTargetClientId) ? tcTargetClientId : currentUser; }
 let tcRunMode = 'normal';
 
 function setTcRating(val) {
@@ -11245,8 +11253,9 @@ function setTcRating(val) {
   btns.forEach((b,i) => b.classList.toggle('sel', i + 1 === val));
 }
 
-function openTrainingCheckinModal() {
-  const client = DATA.clients.find(c => c.id === currentUser);
+function openTrainingCheckinModal(targetClientId) {
+  tcTargetClientId = (currentUser === 'coach' && targetClientId) ? targetClientId : null;
+  const client = DATA.clients.find(c => c.id === tcClientId());
   trainingCheckinPhotoFile = null;
   document.getElementById('tc-photo-preview').innerHTML = '';
   document.getElementById('tc-photo-input').value = '';
@@ -11274,8 +11283,9 @@ function onTcTypeChange() {
   const type = document.getElementById('tc-type').value;
   const isRun = type === 'Løb';
   const isOtherDistance = !isRun && DATA.distanceLoggingEnabled && (DATA.distanceTypes || []).includes(type);
-  const client = DATA.clients.find(c => c.id === currentUser);
-  const gpsEnabled = !!(client && client.features && client.features.gpsTraining);
+  const client = DATA.clients.find(c => c.id === tcClientId());
+  // Live GPS-tur giver kun mening for klienten selv, ikke når coachen logger bagud.
+  const gpsEnabled = currentUser !== 'coach' && !!(client && client.features && client.features.gpsTraining);
   document.getElementById('tc-run-fields').style.display = (isRun || isOtherDistance) ? 'block' : 'none';
   document.getElementById('tc-run-mode-row').style.display = (isRun || (isOtherDistance && gpsEnabled)) ? 'flex' : 'none';
   document.getElementById('tc-run-mode-normal').style.display = isRun ? 'inline-flex' : 'none';
@@ -11339,28 +11349,37 @@ async function saveTrainingCheckin() {
   const note = document.getElementById('tc-note').value.trim();
   if (!type) { showToast('Vælg en træningstype'); return; }
   const checkinId = genId();
+  const cid = tcClientId();
+  const byCoach = currentUser === 'coach';
   let photo = '';
   if (trainingCheckinPhotoFile) {
     const uploaded = await new Promise(resolve => {
       resizeImageFileToBlob(trainingCheckinPhotoFile, 700, 0.7, async blob => {
-        resolve(await uploadExerciseMedia('training-photo', { clientId: currentUser, trainingCheckinId: checkinId }, blob));
+        resolve(await uploadExerciseMedia('training-photo', { clientId: cid, trainingCheckinId: checkinId }, blob));
       });
     });
     if (uploaded.error) { alert('Billede-upload fejlede: ' + uploaded.error); return; }
     photo = uploaded.path;
   }
   if (!DATA.trainingCheckins) DATA.trainingCheckins = [];
-  const checkin = { id: checkinId, clientId: currentUser, date, type, rating: tcRating || null, note, photo, runLogId: null };
+  // Logget af coachen selv → allerede "set", så den ikke dukker op som ny i egen indbakke.
+  const checkin = { id: checkinId, clientId: cid, date, type, rating: tcRating || null, note, photo, runLogId: null, coachSeen: byCoach };
   DATA.trainingCheckins.push(checkin);
   const isDistanceType = type === 'Løb' || (DATA.distanceLoggingEnabled && (DATA.distanceTypes || []).includes(type));
   if (isDistanceType) {
     // NYT (session 12) — gemmer id'et på den evt. oprettede km/tid-registrering på
     // check-in'en, så de to hænger sammen og kan redigeres/slettes samlet bagefter.
-    const runLogId = saveOptionalRunDataFromTrainingCheckin(currentUser, date, type);
+    const runLogId = saveOptionalRunDataFromTrainingCheckin(cid, date, type);
     if (runLogId) checkin.runLogId = runLogId;
   }
   save();
   closeModal('modal-training-checkin');
+  if (byCoach) {
+    showToast('Træning logget for klienten 💪');
+    tcTargetClientId = null;
+    renderDetailHistory(cid);
+    return;
+  }
   showToast('Træning logget 💪');
   checkCelebrations(currentUser);
   if (currentClientView === 'home') renderClientHome();
